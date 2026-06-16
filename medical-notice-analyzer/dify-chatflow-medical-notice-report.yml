@@ -1,0 +1,2901 @@
+{
+  "version": "0.6.0",
+  "kind": "app",
+  "app": {
+    "name": "医药公告采购分析报告 Chatflow",
+    "mode": "advanced-chat",
+    "icon": "📄",
+    "icon_background": "#E0F2FE",
+    "icon_type": "emoji",
+    "description": "首轮输入公告 URL，可选上传历史 Word；生成后支持用户反馈修订；用户确认后才导出 Word。",
+    "use_icon_as_answer_icon": false
+  },
+  "dependencies": [],
+  "workflow": {
+    "conversation_variables": [
+      {
+        "id": "3f09b69c-a06e-5d18-a50b-044f2521d9e6",
+        "name": "source_evidence",
+        "selector": [
+          "conversation",
+          "source_evidence"
+        ],
+        "value_type": "string",
+        "value": "",
+        "description": ""
+      },
+      {
+        "id": "c5208d60-92b9-53bf-96ac-782b3ed9c682",
+        "name": "history_insights",
+        "selector": [
+          "conversation",
+          "history_insights"
+        ],
+        "value_type": "string",
+        "value": "",
+        "description": ""
+      },
+      {
+        "id": "12f8a9ca-5287-553e-9659-b3fb8e9560ee",
+        "name": "current_report_ir",
+        "selector": [
+          "conversation",
+          "current_report_ir"
+        ],
+        "value_type": "string",
+        "value": "",
+        "description": ""
+      },
+      {
+        "id": "8bc8fc61-0ae6-546b-9599-321b1f03c97b",
+        "name": "current_final_report",
+        "selector": [
+          "conversation",
+          "current_final_report"
+        ],
+        "value_type": "string",
+        "value": "",
+        "description": ""
+      },
+      {
+        "id": "c9ce201e-9a99-586b-b831-e6a33f9db9f3",
+        "name": "last_qa_summary",
+        "selector": [
+          "conversation",
+          "last_qa_summary"
+        ],
+        "value_type": "string",
+        "value": "",
+        "description": ""
+      },
+      {
+        "id": "fdbb5e94-b88c-54e2-a1e4-a8d873ff28f9",
+        "name": "repair_attempt_count",
+        "selector": [
+          "conversation",
+          "repair_attempt_count"
+        ],
+        "value_type": "string",
+        "value": "",
+        "description": ""
+      },
+      {
+        "id": "fa766da5-36a9-53e7-8385-4410abeb0428",
+        "name": "last_export_filename",
+        "selector": [
+          "conversation",
+          "last_export_filename"
+        ],
+        "value_type": "string",
+        "value": "",
+        "description": ""
+      }
+    ],
+    "environment_variables": [],
+    "features": {
+      "file_upload": {
+        "enabled": true,
+        "allowed_file_types": [
+          "document"
+        ],
+        "allowed_file_extensions": [
+          ".docx",
+          ".doc"
+        ],
+        "allowed_file_upload_methods": [
+          "local_file"
+        ],
+        "number_limits": 1,
+        "fileUploadConfig": {
+          "file_size_limit": 15,
+          "batch_count_limit": 1,
+          "file_upload_limit": 1,
+          "workflow_file_upload_limit": 1,
+          "image_file_size_limit": 10,
+          "video_file_size_limit": 100,
+          "audio_file_size_limit": 50,
+          "image_file_batch_limit": 1,
+          "single_chunk_attachment_limit": 10,
+          "attachment_image_file_size_limit": 2
+        },
+        "image": {
+          "enabled": false,
+          "number_limits": 0,
+          "transfer_methods": []
+        }
+      },
+      "opening_statement": "输入公告 URL，可选上传关联项目 Word。生成后可直接提出修改意见，确认后再导出 Word。",
+      "suggested_questions": [],
+      "suggested_questions_after_answer": {
+        "enabled": false
+      },
+      "speech_to_text": {
+        "enabled": false
+      },
+      "text_to_speech": {
+        "enabled": false,
+        "language": "",
+        "voice": ""
+      },
+      "retriever_resource": {
+        "enabled": false
+      },
+      "sensitive_word_avoidance": {
+        "enabled": false
+      }
+    },
+    "graph": {
+      "nodes": [
+        {
+          "id": "start_node",
+          "type": "custom",
+          "height": 132,
+          "width": 242,
+          "position": {
+            "x": 30,
+            "y": 320
+          },
+          "positionAbsolute": {
+            "x": 30,
+            "y": 320
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Start",
+            "type": "start",
+            "variables": [
+              {
+                "label": "公告 URL",
+                "max_length": 2048,
+                "options": [],
+                "required": true,
+                "type": "text-input",
+                "variable": "notice_url"
+              },
+              {
+                "label": "关联项目分析稿 Word（可选）",
+                "options": [],
+                "required": false,
+                "type": "file",
+                "variable": "history_report",
+                "allowed_file_types": [
+                  "document"
+                ],
+                "allowed_file_extensions": [
+                  ".docx",
+                  ".doc"
+                ],
+                "allowed_file_upload_methods": [
+                  "local_file"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "classify_turn",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 330,
+            "y": 320
+          },
+          "positionAbsolute": {
+            "x": 330,
+            "y": 320
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Classify Turn",
+            "type": "code",
+            "code": "def main(query: str, current_report_ir: str, repair_attempt_count: str = \"\") -> dict:\n    import re\n\n    text = (query or \"\").strip()\n    compact = re.sub(r\"\\s+\", \"\", text).lower()\n    current = (current_report_ir or \"\").strip()\n    has_report = bool(current and current not in {\"{}\", \"null\", \"None\"})\n\n    if not has_report:\n        return {\"route\": \"first_generate\"}\n\n    approval_phrases = [\n        \"确认下载\",\n        \"可以导出\",\n        \"同意下载\",\n        \"下载word\",\n        \"下载Word\",\n        \"下载报告\",\n        \"导出word\",\n        \"导出Word\",\n        \"生成word\",\n        \"生成Word\",\n    ]\n    revision_markers = [\n        \"质检\",\n        \"needs_fix\",\n        \"block\",\n        \"修复建议\",\n        \"问题统计\",\n        \"问题明细\",\n        \"一般问题\",\n        \"缺失规则\",\n        \"report_depth\",\n        \"table_evidence\",\n        \"修改\",\n        \"修订\",\n        \"调整\",\n        \"补充\",\n        \"删除\",\n        \"改为\",\n        \"缺陷\",\n        \"报告正文\",\n    ]\n    short_confirmation = len(text) <= 40 and text.count(\"\\n\") <= 1\n    has_approval = any(re.sub(r\"\\s+\", \"\", phrase).lower() in compact for phrase in approval_phrases)\n    has_revision = any(marker.lower() in text.lower() for marker in revision_markers)\n    try:\n        repair_count = int((repair_attempt_count or \"0\").strip())\n    except Exception:\n        repair_count = 0\n\n    if short_confirmation and has_approval and not has_revision:\n        return {\"route\": \"approve_download\"}\n    if repair_count >= 3 and has_revision:\n        return {\"route\": \"repair_limit\"}\n    return {\"route\": \"revise\"}\n",
+            "code_language": "python3",
+            "outputs": {
+              "route": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "sys",
+                  "query"
+                ],
+                "variable": "query"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "current_report_ir"
+                ],
+                "variable": "current_report_ir"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "repair_attempt_count"
+                ],
+                "variable": "repair_attempt_count"
+              }
+            ]
+          }
+        },
+        {
+          "id": "route_turn",
+          "type": "custom",
+          "height": 156,
+          "width": 242,
+          "position": {
+            "x": 630,
+            "y": 320
+          },
+          "positionAbsolute": {
+            "x": 630,
+            "y": 320
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Route Turn",
+            "type": "if-else",
+            "cases": [
+              {
+                "case_id": "approve",
+                "logical_operator": "and",
+                "conditions": [
+                  {
+                    "id": "49e63767-4751-5d79-b106-f47415d4e2da",
+                    "variable_selector": [
+                      "classify_turn",
+                      "route"
+                    ],
+                    "comparison_operator": "contains",
+                    "varType": "string",
+                    "value": "approve_download"
+                  }
+                ]
+              },
+              {
+                "case_id": "first",
+                "logical_operator": "and",
+                "conditions": [
+                  {
+                    "id": "7c4febce-81f0-5af8-85a2-e6d15289abbd",
+                    "variable_selector": [
+                      "classify_turn",
+                      "route"
+                    ],
+                    "comparison_operator": "contains",
+                    "varType": "string",
+                    "value": "first_generate"
+                  }
+                ]
+              },
+              {
+                "case_id": "repair_limit",
+                "logical_operator": "and",
+                "conditions": [
+                  {
+                    "id": "ca764b64-c76a-5706-b5e8-2459e8fa0fb4",
+                    "variable_selector": [
+                      "classify_turn",
+                      "route"
+                    ],
+                    "comparison_operator": "contains",
+                    "varType": "string",
+                    "value": "repair_limit"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "history_file_gate",
+          "type": "custom",
+          "height": 156,
+          "width": 242,
+          "position": {
+            "x": 630,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 630,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "History File?",
+            "type": "if-else",
+            "cases": [
+              {
+                "case_id": "has_history",
+                "logical_operator": "and",
+                "conditions": [
+                  {
+                    "id": "079429da-1d5d-5d77-8a0e-9de6d6b890a0",
+                    "variable_selector": [
+                      "start_node",
+                      "history_report"
+                    ],
+                    "comparison_operator": "exists",
+                    "varType": "file"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "history_doc_extractor",
+          "type": "custom",
+          "height": 90,
+          "width": 242,
+          "position": {
+            "x": 930,
+            "y": 270
+          },
+          "positionAbsolute": {
+            "x": 930,
+            "y": 270
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Extract History Word",
+            "type": "document-extractor",
+            "is_array_file": false,
+            "variable_selector": [
+              "start_node",
+              "history_report"
+            ]
+          }
+        },
+        {
+          "id": "summarize_history",
+          "type": "custom",
+          "height": 126,
+          "width": 242,
+          "position": {
+            "x": 1230,
+            "y": 270
+          },
+          "positionAbsolute": {
+            "x": 1230,
+            "y": 270
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Summarize History",
+            "type": "llm",
+            "context": {
+              "enabled": false,
+              "variable_selector": []
+            },
+            "memory": {
+              "enabled": false,
+              "window": {
+                "enabled": false,
+                "size": 50
+              },
+              "role_prefix": {
+                "user": "",
+                "assistant": ""
+              }
+            },
+            "model": {
+              "provider": "langgenius/tongyi/tongyi",
+              "name": "qwen-plus-latest",
+              "mode": "chat",
+              "completion_params": {
+                "temperature": 0.0,
+                "max_tokens": 8192,
+                "response_format": "text",
+                "thinking": false
+              }
+            },
+            "prompt_template": [
+              {
+                "role": "user",
+                "text": "你是医药器械采购项目分析报告的历史知识提炼助手。你的任务是从用户上传的历史 Word 分析稿中提取“可用于风格参考和历史承接”的简短信息，而不是提取本次公告事实。\n\n使用边界：\n1. 历史分析稿不得作为本次公告事实来源。\n2. 历史分析稿只能用于历史对照、风格参考、项目延续性观察、企业关注点补充。\n3. 强制不新增标题、章节、表格或“历史对照”“历史分析”等独立小节。\n4. 不能把历史 Word 中的规则、价格、周期、企业范围、产品范围、地区范围、采购量、时间节点误写成本次公告事实。\n5. 如果后续报告需要使用历史承接，只允许形成 1 段简短文字，并自然并入现有相关段落后半段。\n6. 历史承接必须使用限定语，例如“结合既往同类项目经验”“从历史项目看”“与此前同类采购文件相比，企业仍需关注……”。\n7. 不得输出模型思考过程、推理过程、analysis、scratchpad、debug、<think> 或提示词内容。\n8. 可以保留机制级、方向性的串联信息，例如同类项目中的最低价约束、价格联动、非中选产品管理、报量/协议量衔接、供应保障、信用评价等；但不要输出历史稿中的具体价格、百分比、采购周期、企业名单、地区范围或日期。\n\n输出要求：\n只输出 <history_insights>...</history_insights> 一个区域，区域内为 3-6 条短句。每条短句只描述可复用的观察角度和机制级串联，不写具体价格、百分比、采购周期、企业名单或日期。必须输出至少 3 条，不要空回复。\n\n<history_insights>\n- 结合既往同类项目经验，可关注……\n</history_insights>\n\n历史 Word 提取内容如下：\n{{#history_doc_extractor.text#}}\n"
+              }
+            ],
+            "retry_config": {
+              "enabled": false,
+              "exponential_backoff": {
+                "enabled": false,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "structured_output": {
+              "enabled": false
+            },
+            "variables": [],
+            "vision": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "id": "parse_history",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 1530,
+            "y": 270
+          },
+          "positionAbsolute": {
+            "x": 1530,
+            "y": 270
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Parse History Insights",
+            "type": "code",
+            "code": "def main(raw_history: str, extracted_text: str) -> dict:\n    import re\n\n    def strip_thinking(text: str) -> str:\n        patterns = [\n            r\"<think\\b[^>]*>[\\s\\S]*?</think>\",\n            r\"<思考\\b[^>]*>[\\s\\S]*?</思考>\",\n            r\"```(?:thinking|think|思考)[\\s\\S]*?```\",\n        ]\n        for pattern in patterns:\n            text = re.sub(pattern, \"\", text or \"\", flags=re.I)\n        return text.strip()\n\n    def clean_line(line: str) -> str:\n        line = re.sub(r\"^\\s*[-*•\\d.、]+\\s*\", \"\", line or \"\").strip()\n        line = re.sub(r\"\\d+(?:\\.\\d+)?\\s*(?:%|元/[^，。；\\s]+|元|万元|年|月|日)\", \"相关数值\", line)\n        line = re.sub(r\"20\\d{2}[-年./]\\d{1,2}(?:[-月./]\\d{1,2}日?)?\", \"相关时间\", line)\n        return line.strip(\" ；;。\")\n\n    cleaned = strip_thinking(raw_history or \"\")\n    match = re.search(r\"<history_insights\\b[^>]*>([\\s\\S]*?)</history_insights>\", cleaned, flags=re.I)\n    if match:\n        body = match.group(1)\n        lines = [clean_line(line) for line in body.splitlines()]\n    else:\n        lines = [clean_line(line) for line in cleaned.splitlines()]\n\n    useful = []\n    for line in lines:\n        if not line or \"history_insights\" in line or \"提示词\" in line or \"模型\" in line:\n            continue\n        if any(keyword in line for keyword in (\"历史\", \"同类\", \"价格联动\", \"最低价\", \"非中选\", \"供应保障\", \"信用\", \"报量\", \"协议采购量\", \"企业\")):\n            useful.append(line)\n\n    if not useful:\n        source_lines = [clean_line(line) for line in re.split(r\"[\\r\\n]+\", extracted_text or \"\")]\n        source = \"\\n\".join(line for line in source_lines if line)\n        fallback = []\n        if any(keyword in source for keyword in (\"最低\", \"价格联动\", \"价格体系\")):\n            fallback.append(\"结合既往同类项目经验，可关注最低价约束、价格联动和跨区域价格体系管理。\")\n        if \"非中选\" in source:\n            fallback.append(\"从历史项目看，非中选产品挂网路径和院内使用空间需要在企业关注点中提示。\")\n        if any(keyword in source for keyword in (\"协议采购量\", \"报量\", \"使用比例\")):\n            fallback.append(\"与此前同类采购文件相比，报量、协议采购量和中选产品使用要求通常会影响供应保障安排。\")\n        if any(keyword in source for keyword in (\"供应\", \"信用\", \"断供\")):\n            fallback.append(\"结合既往同类项目经验，供应保障和信用评价是执行期风险管理重点。\")\n        useful = fallback\n\n    if not useful:\n        return {\"history_insights\": \"\"}\n    bullets = []\n    for line in useful[:6]:\n        if not re.match(r\"^(结合既往同类项目经验|从历史项目看|与此前同类采购文件相比)\", line):\n            line = \"结合既往同类项目经验，\" + line\n        bullets.append(\"- \" + line.rstrip(\"。\") + \"。\")\n    return {\"history_insights\": \"<history_insights>\\n\" + \"\\n\".join(bullets) + \"\\n</history_insights>\"}\n",
+            "code_language": "python3",
+            "outputs": {
+              "history_insights": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "summarize_history",
+                  "text"
+                ],
+                "variable": "raw_history"
+              },
+              {
+                "value_selector": [
+                  "history_doc_extractor",
+                  "text"
+                ],
+                "variable": "extracted_text"
+              }
+            ]
+          }
+        },
+        {
+          "id": "assign_history",
+          "type": "custom",
+          "height": 92,
+          "width": 242,
+          "position": {
+            "x": 1830,
+            "y": 270
+          },
+          "positionAbsolute": {
+            "x": 1830,
+            "y": 270
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Save History",
+            "type": "assigner",
+            "items": [
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "parse_history",
+                  "history_insights"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "history_insights"
+                ]
+              }
+            ],
+            "isInIteration": false,
+            "isInLoop": false,
+            "version": "2"
+          }
+        },
+        {
+          "id": "empty_history",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 930,
+            "y": 540
+          },
+          "positionAbsolute": {
+            "x": 930,
+            "y": 540
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Clear History",
+            "type": "code",
+            "code": "def main() -> dict:\n    return {\"history_insights\": \"\"}\n",
+            "code_language": "python3",
+            "outputs": {
+              "history_insights": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": []
+          }
+        },
+        {
+          "id": "assign_empty_history",
+          "type": "custom",
+          "height": 92,
+          "width": 242,
+          "position": {
+            "x": 1230,
+            "y": 540
+          },
+          "positionAbsolute": {
+            "x": 1230,
+            "y": 540
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Save Empty History",
+            "type": "assigner",
+            "items": [
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "empty_history",
+                  "history_insights"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "history_insights"
+                ]
+              }
+            ],
+            "isInIteration": false,
+            "isInLoop": false,
+            "version": "2"
+          }
+        },
+        {
+          "id": "fetch_source",
+          "type": "custom",
+          "height": 150,
+          "width": 242,
+          "position": {
+            "x": 2130,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 2130,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Fetch Notice",
+            "type": "http-request",
+            "authorization": {
+              "config": null,
+              "type": "no-auth"
+            },
+            "body": {
+              "type": "json",
+              "data": [
+                {
+                  "key": "",
+                  "type": "text",
+                  "value": "{\"url\":\"{{#start_node.notice_url#}}\",\"max_attachments\":25,\"max_combined_chars\":60000}"
+                }
+              ]
+            },
+            "headers": "Content-Type:application/json",
+            "method": "post",
+            "params": "",
+            "url": "http://192.168.34.88:8099/analyze",
+            "retry_config": {
+              "enabled": true,
+              "exponential_backoff": {
+                "enabled": true,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "ssl_verify": true,
+            "timeout": {
+              "connect": 10,
+              "read": 180,
+              "write": 30
+            },
+            "variables": []
+          }
+        },
+        {
+          "id": "parse_source_evidence",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 2430,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 2430,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Parse Source Evidence",
+            "type": "code",
+            "code": "def main(fetch_body: str) -> dict:\n    import json\n\n    raw = fetch_body or \"\"\n    try:\n        data = json.loads(raw or \"{}\")\n    except Exception:\n        # fallback raw body\n        return {\"evidence_text\": raw}\n\n    evidence = data.get(\"evidence_for_llm\") if isinstance(data, dict) else \"\"\n    if isinstance(evidence, str) and evidence.strip():\n        return {\"evidence_text\": evidence}\n\n    # fallback raw body\n    return {\"evidence_text\": raw}\n",
+            "code_language": "python3",
+            "outputs": {
+              "evidence_text": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "fetch_source",
+                  "body"
+                ],
+                "variable": "fetch_body"
+              }
+            ]
+          }
+        },
+        {
+          "id": "assign_source",
+          "type": "custom",
+          "height": 92,
+          "width": 242,
+          "position": {
+            "x": 2730,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 2730,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Save Evidence",
+            "type": "assigner",
+            "items": [
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "parse_source_evidence",
+                  "evidence_text"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "source_evidence"
+                ]
+              }
+            ],
+            "isInIteration": false,
+            "isInLoop": false,
+            "version": "2"
+          }
+        },
+        {
+          "id": "generate_report",
+          "type": "custom",
+          "height": 126,
+          "width": 242,
+          "position": {
+            "x": 3030,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 3030,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Generate Report",
+            "type": "llm",
+            "context": {
+              "enabled": false,
+              "variable_selector": []
+            },
+            "memory": {
+              "enabled": false,
+              "window": {
+                "enabled": false,
+                "size": 50
+              },
+              "role_prefix": {
+                "user": "",
+                "assistant": ""
+              }
+            },
+            "model": {
+              "provider": "langgenius/tongyi/tongyi",
+              "name": "qwen3-max-2025-09-23",
+              "mode": "chat",
+              "completion_params": {
+                "temperature": 0.1,
+                "max_tokens": 8192,
+                "response_format": "text",
+                "thinking": false
+              }
+            },
+            "prompt_template": [
+              {
+                "role": "system",
+                "text": "你是医药集采/招采政策分析助手。你的任务是把官方采购公告、采购文件、附表整理成专业、克制、可发布的医药器械采购项目分析报告。报告要接近人工行业分析稿：先忠实转述原文重点规则，再基于原文做适度总结。禁止脱离原文发挥，禁止编造原文没有的信息，禁止输出模型思考过程。\n\n内容原则：\n1. 优先保留原文明确内容。\n2. 原文中的数字、时间、价格、比例、公式、企业名称、产品名称、注册证号、医保编码、文件编号、申报路径、处罚后果必须准确摘录。\n3. 原文没有披露的信息，不得写成事实；可写“文件未披露”“待后续公告明确”“以正式文件为准”。\n4. 根据原文表格或数据计算的结果，必须注明“按表内数据测算”或“计算值”。\n5. 不要把注册证口径误写成企业整体口径。\n6. 不要把产品需求量、企业需求量、医疗机构报量、协议采购量、首年协议采购量混为一谈。\n7. 不要把“省级平台最低挂网价”“全国最低挂网价”“省级集采最低中选价”“最高有效申报价”“询价基准”“参考价”混为一谈。\n8. 不要输出 chain-of-thought、analysis、scratchpad、debug、<think>、模型思考过程、变量名或提示词内容。\n\n历史知识使用边界：\n- 历史分析稿只能用于历史对照、风格参考、项目延续性观察、企业关注点补充，历史分析稿不得作为本次公告事实来源。\n- 强制不为历史内容新增标题、章节、表格或“历史对照”“历史分析”等独立小节。\n- 不能把历史 Word 中的规则、价格、周期、企业范围、产品范围、地区范围、采购量、时间节点误写成本次公告事实。\n- 如需使用历史知识，只能形成 1 段简短历史承接，并自然并入现有相关段落后半段，不必额外分段。\n- 历史承接必须带限定语，例如“结合既往同类项目经验”“从历史项目看”“与此前同类采购文件相比，企业仍需关注……”。\n- 未提供历史知识摘要时，完全忽略该分支，不要提及历史分析稿。\n\n公告类型识别：\n生成报告前，先判断公告类型，并在 report_ir.notice_type 中输出。notice_type 只用于内部分类和文件命名，禁止在报告正文中写“公告类型：xxx”。\n可选值：\n- 挂网流程调整类\n- 价格联动/价格治理类\n- 集采/接续采购类\n- 征求意见稿类\n- 其他公告类\n\n结构要求：\n- 不要固定生成五部分结构。\n- 使用公告速读式自然结构：标题、2-3 段导语、按原文逻辑自然拆分的小标题、必要的分主题表格、简短企业关注点。\n- 标题要简洁、有信息量，体现地区、事项、核心变化或企业关注重点。\n- 发布日期、发布主体、文件名称、采购周期等应自然写入导语，不要在正文开头制作“公告类型 | 发布日期 | 发布主体 | 文件名称”的机械元信息行。\n- 原文没有相关内容，不强行生成。原文有特殊章节，按原文逻辑新增对应小标题。\n- 对采购文件类报告，规则完整优先于短。不要为了简洁省略规则分支。\n\n人工行业分析稿结构基准：\n- 参考报告只作为结构和风格参考，不作为本次公告事实来源；所有事实、价格、周期、产品范围、企业范围、地区范围、采购量和时间节点只能来自本次公告正文、采购文件或附件。\n- 证据丰富时不要写成短摘要。若公告正文、采购文件或附件包含多类规则、价格门槛、报价路径、拟中选规则、执行安排、非中选产品管理、名词解释或信用约束，报告应接近人工行业分析稿的深度：导语交代背景和核心事项，正文按规则主题展开，表格保留关键结构化信息，最后给出克制的企业关注点；正文通常应达到 1800-2600 字，不得只输出 800-1200 字的概括稿。\n- 采购文件类报告正文通常应覆盖至少 4 个有效小节；材料丰富时不要只输出 1-2 段概括。\n- 表格和小节是为保留规则差异服务，不是装饰；能用分主题表格更清晰表达的价格、周期、分类、口径和处理后果，应优先拆表呈现。\n\n规则完整性保留：\n当输入材料中出现以下章节或关键词时，报告必须尽量保留为独立小节或分主题表格，不要合并成一段概括：\n- 采购品种范围\n- 产品分类\n- 最高有效申报价\n- 参考价\n- 企业报价要求\n- 有效报价\n- 拟中选产品确定\n- 中选产品确定\n- 协议采购量\n- 首年协议采购量\n- 采购执行\n- 价格联动\n- 非中选产品管理\n- 新获批产品管理\n- 名词解释\n- 带量最低价\n- 非带量最低价\n- 非中选产品\n- 申报材料\n- 配送要求\n- 信用评价\n- 失信约束\n- 取消中选资格\n- 暂不予挂网\n\n非中选产品管理：\n只要原文出现“非中选产品”，必须单独生成“非中选产品管理”章节。该章节应尽量区分：\n1. 已中选注册证的非中选产品；\n2. 不属于已中选注册证的非中选产品；\n3. 特殊品种或特殊规格的非中选产品；\n4. 是否可作为中选产品挂网采购；\n5. 是否共享协议采购量；\n6. 是否无协议采购量；\n7. 不符合要求的处理方式。\n不要只写“非中选产品可挂网但无协议量保障”这类过度概括句。\n\n名词解释：\n如果原文出现名词定义，必须保留“名词解释”章节。常见定义包括：带量最低价、非带量最低价、中选产品、非中选产品、地区最低价、报价单元、同采购品种同类别同注册证、参考价。名词解释应尽量忠实摘录原文，不要改写成自己的解释。每一个名词解释必须单独成为一个 paragraph，并使用阿拉伯数字序号，格式为“1. 带量最低价：指……”“2. 非带量最低价：指……”。不要把多个名词解释合并在同一段。\n\n表格原则：\n- 不要生成一个包含所有字段的大表。表格必须按主题拆分，一个表只放同一类数据。\n- 只有原文存在明确结构化信息时才制表，不要为了形式而制表，不要输出空表。\n- 表格标题必须清楚，字段必须来自原文或由原文数据直接计算。\n- 没有原文依据的字段不要生成。原文空值按“-”“未披露”“暂未公布”处理。\n- 征求意见稿中用“*”代替的价格，不得自行推断，应写“暂未公布”或“以正式文件为准”。\n- 数字格式统一，金额保留单位，百分比保留原文精度；如需计算，默认保留两位小数。\n\n候选表格：\n- 采购品种及价格门槛表：采购品种、类别、类别名称、最高有效申报价/参考价、备注。\n- 报价规则表：采购品种、情形、报价单元、报价单位、有效报价条件。\n- 拟中选规则表：采购品种、情形、拟中选条件、拟中选价格确定方式。\n- 非中选产品管理表：产品类型、适用情形、挂网或中选产品身份条件、协议采购量安排。\n- 关键执行要求表：事项、规则要求、后果或备注。\n- 关键时间节点表、采购需求量表、协议采购量分配表、申报材料/执行要求表。\n\n语言风格：\n使用正式、客观、克制的政策分析语言。禁止使用或避免使用以下模型化、营销化、夸张化表达：\n- 绝对红线\n- 刚性护城河\n- 不给价格虚高留任何死角\n- 中选即触雷\n- 全面压缩\n- 强势倒逼\n- 重大冲击\n- 必然\n- 显然\n- 唯一选择\n- 全国底价\n- 实时联动\n推荐使用：报价上限、价格联动要求、企业需关注后续价格调整义务、不接受价格联动的可能影响对应产品中选资格、相关产品需按文件要求执行、以官方文件规定为准。\n\n多品种耗材带量联动/征求意见稿类采购文件的覆盖要求：\n若原文包含相关内容，应至少覆盖发布时间、发布主体、文件名称、采购文件编号；采购品种和不纳入范围；采购主体；采购周期；产品分类和最高有效申报价/参考价；企业报价要求；拟中选产品确定规则；填报首年协议采购量；采购执行说明；价格联动；非中选产品管理；名词解释。不要硬编码具体项目、地区或产品名称，只在输入材料支持时生成。\n\n挂网流程调整类公告的背景使用：\n如果输入材料明确提供外部政策背景、历史同类稿或其他省份动态，可以自然并入导语或企业关注点；如果输入材料没有提供，不得自行补充省份案例、全国趋势或政策背景。\n\nWord 文件自动命名：\n请在 report_ir.suggested_filename 中输出建议 Word 文件名，不带扩展名。推荐格式：【地区或层级】核心事项—项目分析【YYYYMMDD】。不要包含 \\ / : * ? \" < > |、Markdown 符号、“水印”字样或 Dify 变量。\n\n声明：\n不要生成临时声明，不要改写声明。report_ir.disclaimer 可以留空；Word 导出层会统一添加固定“声  明”。\n\n输出格式：\n只输出 <report_ir> 结构化 JSON，一个区域即可；不要输出 Markdown 正文，不要输出 <final_report>，不要在区域外输出任何文字。Dify 展示正文和 Word 文件将由后端根据 ReportIR 渲染生成。\nJSON 必须可被严格解析。所有字符串内部如需引用术语，请优先使用中文引号“……”或书名号《……》；不要在字符串内部直接使用未转义的英文半角双引号 \"。如必须使用半角双引号，必须写成 \\\"。\n\n注意：enterprise_tips 必须是字符串数组，例如 [\"企业需关注申报入口变化。\"]；不要输出对象数组，例如 [{\"tip\":\"企业需关注申报入口变化。\"}]。\n\n<report_ir>\n{\n  \"title\": \"\",\n  \"suggested_filename\": \"\",\n  \"notice_type\": \"\",\n  \"publish_date\": \"\",\n  \"source_agency\": \"\",\n  \"document_name\": \"\",\n  \"lead_paragraphs\": [],\n  \"sections\": [\n    {\n      \"heading\": \"\",\n      \"paragraphs\": [],\n      \"tables\": [\n        {\n          \"title\": \"\",\n          \"headers\": [],\n          \"rows\": [],\n          \"notes\": []\n        }\n      ],\n      \"highlights\": []\n    }\n  ],\n  \"enterprise_tips\": [],\n  \"disclaimer\": \"\"\n}\n</report_ir>\n"
+              },
+              {
+                "role": "user",
+                "text": "请根据以下公告正文、采购文件和附件内容，生成一份医药器械采购项目分析报告。\n\n要求：\n1. 报告风格参考人工行业分析稿，语言专业、自然、重点突出。\n2. 必须严格基于输入材料生成，不要编造原文未披露的信息。\n3. 不要固定写成五个部分，不要机械编号。\n4. 请先判断公告类型，并在 report_ir.notice_type 中输出；但不要在报告正文中展示“公告类型：xxx”。\n5. 发布日期、发布主体、文件名称、采购周期等应自然写入导语，不要生成机械元信息行。\n6. 按公告和采购文件原文逻辑自然拆分小标题。\n7. 对采购文件类报告，规则完整优先于短。不要为了简洁省略规则分支。\n8. 表格按类别拆分，只在必要时使用，不要把所有信息塞进一个大表。\n9. 如果原文或附件包含大表、产品清单、价格表，请优先提取附件名称、产品条数、产品分类、价格差异、来源省份、处理要求和企业后果。\n10. 对企业排名、占比、涨幅、合计等内容必须说明口径。\n11. 如果是根据原文数据计算的结果，应说明“按表内数据测算”或“计算值”。\n12. 重点规则句可以放入 highlights。\n13. 企业关注点要简短克制，不要写成咨询报告。\n14. 不要输出思考过程。\n15. 不要输出水印相关内容。\n16. 不要生成临时声明；report_ir.disclaimer 可以留空，Word 导出层会统一添加固定“声  明”。\n17. 只输出 <report_ir> 结构化 JSON，不要输出 <final_report> 或 Markdown 正文；Dify 展示正文将由后端根据 ReportIR 渲染。\n18. report_ir.suggested_filename 必须生成，作为后续 Word 下载文件名使用，不带 .docx。\n19. report_ir.enterprise_tips 必须是字符串数组，例如 [\"企业需关注申报入口变化。\"]；不要输出对象数组，例如 [{\"tip\":\"企业需关注申报入口变化。\"}]。\n19a. JSON 必须可被严格解析。所有字符串内部如需引用术语，请优先使用中文引号“……”或书名号《……》；不要在字符串内部直接使用未转义的英文半角双引号 \"。如必须使用半角双引号，必须写成 \\\"。\n20. 如果提供 history_insights，只能把它作为历史承接和风格参考，不能作为本次公告事实来源；不得新增历史标题、章节或表格；不能把历史 Word 中的规则、价格、周期、企业范围、产品范围、地区范围、采购量、时间节点误写成本次公告事实。\n21. 历史承接最多 1 段，并自然并入现有相关段落后半段；没有 history_insights 时不要提及历史分析稿。\n22. 对挂网流程调整类公告，只有输入材料明确提供外部政策背景、历史同类稿或其他省份动态时，才可写入相关背景；材料没有提供时不得自行补充省份案例、全国趋势或政策背景。\n\n23. 证据丰富时不要写成短摘要；采购文件类或附件规则丰富的报告，正文通常不少于 1800 字，建议 1800-2600 字，并应包含导语、关键规则小节、必要分主题表格和企业关注点。\n24. 若原文或附件提供表格，需保留表格标题、表头、关键数值、单位和备注口径；不要把多个规则表压成一段泛泛总结。\n25. 价格表格必须优先保持附件原始表格口径：如果附件表头已经写明“价格（元）”“挂网价格（元）”“全国较低价格（元）”等单位，ReportIR 表格 cell 中优先填写原始数字（如 58、65、47），不要再写成“58元”“65元”“47元”；单位放在表头或备注中。\n26. 不要把多个型号、多个注册证或多行价格自行合并成“58元或65元（依型号而定）”“34个为58元、15个为65元”等统计或概括，除非附件原文直接披露该统计，或报告明确写明逐行测算口径并且证据中有完整可核验的行；不满足时只展示少量逐行原始样例，或写“具体价格详见附件清单”。\n\n规则完整性要求：\n如果输入材料出现采购品种范围、产品分类、最高有效申报价、参考价、企业报价要求、有效报价、拟中选产品确定、中选产品确定、协议采购量、首年协议采购量、采购执行、价格联动、非中选产品管理、新获批产品管理、名词解释、带量最低价、非带量最低价、非中选产品、申报材料、配送要求、信用评价、失信约束、取消中选资格、暂不予挂网等内容，应尽量保留为独立小节或分主题表格。\n\n非中选产品管理：\n只要原文出现“非中选产品”，必须单独生成“非中选产品管理”章节，并尽量区分已中选注册证的非中选产品、不属于已中选注册证的非中选产品、特殊品种或特殊规格的非中选产品、是否可作为中选产品挂网采购、是否共享协议采购量、是否无协议采购量、不符合要求的处理方式。\n\n名词解释：\n如果原文出现名词定义，必须保留“名词解释”章节，尽量忠实摘录原文。常见定义包括带量最低价、非带量最低价、中选产品、非中选产品、地区最低价、报价单元、同采购品种同类别同注册证、参考价。每一个名词解释必须单独成为一个 paragraph，并使用阿拉伯数字序号，格式为“1. 带量最低价：指……”“2. 非带量最低价：指……”。不要把多个名词解释合并在同一段。\n\n候选表格：\n1. 采购品种及价格门槛表：采购品种、类别、类别名称、最高有效申报价/参考价、备注。\n2. 报价规则表：采购品种、情形、报价单元、报价单位、有效报价条件。\n3. 拟中选规则表：采购品种、情形、拟中选条件、拟中选价格确定方式。\n4. 非中选产品管理表：产品类型、适用情形、挂网或中选产品身份条件、协议采购量安排。\n5. 关键执行要求表：事项、规则要求、后果或备注。\n\n语言风格：\n禁止使用“绝对红线、刚性护城河、不给价格虚高留任何死角、中选即触雷、全面压缩、强势倒逼、重大冲击、必然、显然、唯一选择、全国底价、实时联动”等模型化或营销化表达。请改用“报价上限、价格联动要求、企业需关注后续价格调整义务、不接受价格联动的可能影响对应产品中选资格、相关产品需按文件要求执行、以官方文件规定为准”等克制表达。\n\n公告 URL：\n{{#start_node.notice_url#}}\n\n输入材料如下：\n{{#conversation.source_evidence#}}\n\n历史知识摘要（可为空）：\n{{#conversation.history_insights#}}\n"
+              }
+            ],
+            "retry_config": {
+              "enabled": false,
+              "exponential_backoff": {
+                "enabled": false,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "structured_output": {
+              "enabled": false
+            },
+            "variables": [],
+            "vision": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "id": "build_render_payload",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 3330,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 3330,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Build Render Payload",
+            "type": "code",
+            "code": "def main(report: str) -> dict:\n    import json\n    payload = {\n        \"markdown\": report or \"\",\n        \"strict_quality\": False,\n    }\n    return {\"payload\": json.dumps(payload, ensure_ascii=False)}\n",
+            "code_language": "python3",
+            "outputs": {
+              "payload": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "generate_report",
+                  "text"
+                ],
+                "variable": "report"
+              }
+            ]
+          }
+        },
+        {
+          "id": "render_report",
+          "type": "custom",
+          "height": 150,
+          "width": 242,
+          "position": {
+            "x": 3630,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 3630,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Render Report",
+            "type": "http-request",
+            "authorization": {
+              "config": null,
+              "type": "no-auth"
+            },
+            "body": {
+              "type": "json",
+              "data": [
+                {
+                  "key": "",
+                  "type": "text",
+                  "value": "{{#build_render_payload.payload#}}"
+                }
+              ]
+            },
+            "headers": "Content-Type:application/json",
+            "method": "post",
+            "params": "",
+            "url": "http://192.168.34.88:8099/report/render",
+            "retry_config": {
+              "enabled": true,
+              "exponential_backoff": {
+                "enabled": true,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "ssl_verify": true,
+            "timeout": {
+              "connect": 10,
+              "read": 120,
+              "write": 30
+            },
+            "variables": []
+          }
+        },
+        {
+          "id": "parse_render",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 3930,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 3930,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Parse Render",
+            "type": "code",
+            "code": "def main(render_body: str) -> dict:\n    import json\n    try:\n        data = json.loads(render_body or \"{}\")\n    except Exception:\n        data = {\"success\": False, \"error\": \"render endpoint returned non-JSON\"}\n    report_ir = data.get(\"report_ir\") if data.get(\"success\") else None\n    report_markdown = data.get(\"report_markdown\") or \"\"\n    error = data.get(\"error\") or \"\"\n    if not data.get(\"success\") and not report_markdown:\n        report_markdown = \"报告解析失败：\" + (error or \"ReportIR 解析失败\")\n    return {\n        \"report_ir\": json.dumps(report_ir, ensure_ascii=False) if report_ir else \"\",\n        \"report_markdown\": report_markdown,\n        \"render_error\": error,\n    }\n",
+            "code_language": "python3",
+            "outputs": {
+              "report_ir": {
+                "children": null,
+                "type": "string"
+              },
+              "report_markdown": {
+                "children": null,
+                "type": "string"
+              },
+              "render_error": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "render_report",
+                  "body"
+                ],
+                "variable": "render_body"
+              }
+            ]
+          }
+        },
+        {
+          "id": "qa_report_first",
+          "type": "custom",
+          "height": 126,
+          "width": 242,
+          "position": {
+            "x": 4230,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 4230,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "QA Report",
+            "type": "llm",
+            "context": {
+              "enabled": false,
+              "variable_selector": []
+            },
+            "memory": {
+              "enabled": false,
+              "window": {
+                "enabled": false,
+                "size": 50
+              },
+              "role_prefix": {
+                "user": "",
+                "assistant": ""
+              }
+            },
+            "model": {
+              "provider": "langgenius/tongyi/tongyi",
+              "name": "qwen-plus-latest",
+              "mode": "chat",
+              "completion_params": {
+                "temperature": 0.0,
+                "max_tokens": 8192,
+                "response_format": "text",
+                "thinking": false
+              }
+            },
+            "prompt_template": [
+              {
+                "role": "user",
+                "text": "你是医药器械采购项目分析报告质检助手。你的任务是核对生成报告是否忠实于公告原文和附件证据，是否错误使用历史分析稿，是否存在语言和结构问题。\n\n质检重点：\n1. 检查报告中的发布时间、发布主体、文件名称、采购品种、采购周期、价格、比例、时间节点、企业名称、注册证口径、医保编码、处罚后果是否有原文依据。\n2. 检查是否出现纯大模型发挥、没有来源依据的判断、绝对化结论或营销化表述。\n3. 检查 ReportIR 与 final_report 是否一致，是否遗漏原文明确的关键规则。\n4. 检查 history_leakage：是否把历史 Word 的规则、价格、周期、企业范围、产品范围、地区范围、采购量、时间节点写成本次公告事实；是否为历史分析新增“历史对照”“历史分析”等标题；是否把历史内容做成独立章节或表格。\n5. 若历史内容被使用，只能是带限定语的一段简短承接，且不得含历史稿具体数值或规则。\n6. 检查是否包含 <think>、analysis、scratchpad、debug、chain-of-thought、Dify 变量、prompt 内容、JSON 原文泄漏或临时声明。\n7. 不输出推理过程，只输出 JSON。\n\n补充质检要求：\n8. 逐表检查：对 ReportIR 和 final_report 中每个表格的表格标题、表头、关键数值、单位、备注口径逐项核对原始公告和附件证据；凡证据中找不到或口径被改写的，列入 unsupported_claims。\n9. 对占比、比例、百分比这类派生值，如果报告明确标注“按表内数据测算”或“计算值”，且原始证据中存在可计数的表格记录、分类或数量基础，不要仅因原文未逐字披露该百分比而列为 unsupported_claims；但未说明测算口径、缺少基础数量、或金额/价格/日期等非百分比数值仍必须逐项核验原文依据。\n9a. 价格表格允许单位等价：如果报告表头或证据表头已经写明“价格（元）”“挂网价格（元）”“全国较低价格（元）”，且同一产品/同一行上下文中能找到裸数字 58、65、47，则报告中写成 58元、65元、47元不应仅因缺少连续字符串“58元”而判为 unsupported_claims；但跨产品拼接、无同一行依据或自行统计型号数量仍应指出。\n10. 检查报告是否接近人工行业分析稿结构：证据丰富时不要写成短摘要；若采购文件包含多类规则而报告只有少量概括段落，或正文不足约 1800 字，应列为 major 的结构和完整性问题，并要求补充导语、规则小节、分主题表格和企业关注点。\n\n严重程度建议：\n- blocker：JSON 非法、明显脱离原文、历史事实泄漏为本次事实、Word 不应导出的严重问题。\n- major：关键规则缺失、无依据价格/周期/范围、口径混淆、历史新增标题。\n- minor：语言不够克制、格式轻微问题、可自动修复的表述。\n\n只输出以下 JSON，不要输出 Markdown 代码块以外的说明，也不要输出思考过程：\n\n{\n  \"status\": \"pass | needs_fix | block\",\n  \"issues\": [\n    {\n      \"severity\": \"minor | major | blocker\",\n      \"category\": \"\",\n      \"report_text\": \"\",\n      \"source_quote\": \"\",\n      \"fix_instruction\": \"\"\n    }\n  ],\n  \"unsupported_claims\": [],\n  \"history_leakage\": [],\n  \"missing_rules\": [],\n  \"language_issues\": [],\n  \"fix_instructions\": [],\n  \"summary\": \"\"\n}\n\n原始公告和附件证据：\n{{#conversation.source_evidence#}}\n\n历史知识摘要（可为空，只能用于识别误用风险）：\n{{#conversation.history_insights#}}\n\nReportIR：\n{{#parse_render.report_ir#}}\n\nfinal_report：\n{{#parse_render.report_markdown#}}\n"
+              }
+            ],
+            "retry_config": {
+              "enabled": false,
+              "exponential_backoff": {
+                "enabled": false,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "structured_output": {
+              "enabled": false
+            },
+            "variables": [],
+            "vision": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "id": "build_qa_payload",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 4530,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 4530,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Build QA Payload",
+            "type": "code",
+            "code": "def main(qa_output: str, report_ir: str, report_markdown: str, evidence: str, history: str) -> dict:\n    import json\n    MAX_PAYLOAD_CHARS = 110000\n\n    def truncate_payload_fields(payload):\n        field_limits = [\n            (\"evidence_text\", 60000),\n            (\"history_text\", 12000),\n            (\"report_text\", 16000),\n            (\"qa_output\", 8000),\n        ]\n        for key, limit in field_limits:\n            value = payload.get(key)\n            if isinstance(value, str) and len(value) > limit:\n                payload[key] = value[:limit] + \"\\n[内容过长，已截断]\"\n        while len(json.dumps(payload, ensure_ascii=False)) > MAX_PAYLOAD_CHARS:\n            changed = False\n            for key, _limit in field_limits:\n                value = payload.get(key)\n                if isinstance(value, str) and len(value) > 2000:\n                    payload[key] = value[: max(2000, int(len(value) * 0.75))] + \"\\n[内容过长，已截断]\"\n                    changed = True\n                    break\n            if not changed:\n                break\n        return payload\n\n    try:\n        parsed_report_ir = json.loads(report_ir or \"{}\")\n    except Exception:\n        parsed_report_ir = None\n    payload = {\n        \"qa_output\": qa_output or \"\",\n        \"report_ir\": parsed_report_ir,\n        \"report_text\": report_markdown or report_ir or \"\",\n        \"history_text\": history or \"\",\n        \"evidence_text\": evidence or \"\",\n    }\n    payload = truncate_payload_fields(payload)\n    return {\"payload\": json.dumps(payload, ensure_ascii=False)}\n",
+            "code_language": "python3",
+            "outputs": {
+              "payload": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "qa_report_first",
+                  "text"
+                ],
+                "variable": "qa_output"
+              },
+              {
+                "value_selector": [
+                  "parse_render",
+                  "report_ir"
+                ],
+                "variable": "report_ir"
+              },
+              {
+                "value_selector": [
+                  "parse_render",
+                  "report_markdown"
+                ],
+                "variable": "report_markdown"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "source_evidence"
+                ],
+                "variable": "evidence"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "history_insights"
+                ],
+                "variable": "history"
+              }
+            ]
+          }
+        },
+        {
+          "id": "parse_qa_first",
+          "type": "custom",
+          "height": 150,
+          "width": 242,
+          "position": {
+            "x": 4830,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 4830,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Parse QA",
+            "type": "http-request",
+            "authorization": {
+              "config": null,
+              "type": "no-auth"
+            },
+            "body": {
+              "type": "json",
+              "data": [
+                {
+                  "key": "",
+                  "type": "text",
+                  "value": "{{#build_qa_payload.payload#}}"
+                }
+              ]
+            },
+            "headers": "Content-Type:application/json",
+            "method": "post",
+            "params": "",
+            "url": "http://192.168.34.88:8099/report/qa",
+            "retry_config": {
+              "enabled": true,
+              "exponential_backoff": {
+                "enabled": true,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "ssl_verify": true,
+            "timeout": {
+              "connect": 10,
+              "read": 120,
+              "write": 30
+            },
+            "variables": []
+          }
+        },
+        {
+          "id": "read_qa_first",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 5130,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 5130,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Read QA",
+            "type": "code",
+            "code": "def main(qa_body: str) -> dict:\n    import json\n    try:\n        data = json.loads(qa_body or \"{}\")\n    except Exception:\n        data = {\"success\": False, \"qa_summary\": \"质检接口返回非 JSON\"}\n    qa = data.get(\"qa\") or {}\n    summary = data.get(\"qa_summary\") or qa.get(\"summary\") or \"\"\n    status = qa.get(\"status\") or data.get(\"status\") or \"\"\n    return {\n        \"qa_summary\": summary,\n        \"qa_status\": status,\n        \"qa_body\": json.dumps(data, ensure_ascii=False),\n    }\n",
+            "code_language": "python3",
+            "outputs": {
+              "qa_summary": {
+                "children": null,
+                "type": "string"
+              },
+              "qa_status": {
+                "children": null,
+                "type": "string"
+              },
+              "qa_body": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "parse_qa_first",
+                  "body"
+                ],
+                "variable": "qa_body"
+              }
+            ]
+          }
+        },
+        {
+          "id": "reset_repair_state",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 5280,
+            "y": 560
+          },
+          "positionAbsolute": {
+            "x": 5280,
+            "y": 560
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Reset Repair State",
+            "type": "code",
+            "code": "def main() -> dict:\n    return {\"repair_attempt_count\": \"0\"}\n",
+            "code_language": "python3",
+            "outputs": {
+              "repair_attempt_count": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": []
+          }
+        },
+        {
+          "id": "assign_initial_report",
+          "type": "custom",
+          "height": 92,
+          "width": 242,
+          "position": {
+            "x": 5430,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 5430,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Save Current Report",
+            "type": "assigner",
+            "items": [
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "parse_render",
+                  "report_ir"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "current_report_ir"
+                ]
+              },
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "parse_render",
+                  "report_markdown"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "current_final_report"
+                ]
+              },
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "read_qa_first",
+                  "qa_summary"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "last_qa_summary"
+                ]
+              },
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "reset_repair_state",
+                  "repair_attempt_count"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "repair_attempt_count"
+                ]
+              }
+            ],
+            "isInIteration": false,
+            "isInLoop": false,
+            "version": "2"
+          }
+        },
+        {
+          "id": "answer_initial",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 5730,
+            "y": 420
+          },
+          "positionAbsolute": {
+            "x": 5730,
+            "y": 420
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Answer Report",
+            "type": "answer",
+            "answer": "{{#conversation.current_final_report#}}\n\n---\n\n质检摘要：\n{{#conversation.last_qa_summary#}}\n\nWord 下载将在你确认后生成。若需要调整报告，请直接提出修改意见；若认可，请回复“确认下载 Word”。",
+            "variables": []
+          }
+        },
+        {
+          "id": "revise_report",
+          "type": "custom",
+          "height": 126,
+          "width": 242,
+          "position": {
+            "x": 630,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 630,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Revise Report",
+            "type": "llm",
+            "context": {
+              "enabled": false,
+              "variable_selector": []
+            },
+            "memory": {
+              "enabled": false,
+              "window": {
+                "enabled": false,
+                "size": 50
+              },
+              "role_prefix": {
+                "user": "",
+                "assistant": ""
+              }
+            },
+            "model": {
+              "provider": "langgenius/tongyi/tongyi",
+              "name": "qwen3-max-2025-09-23",
+              "mode": "chat",
+              "completion_params": {
+                "temperature": 0.0,
+                "max_tokens": 8192,
+                "response_format": "text",
+                "thinking": false
+              }
+            },
+            "prompt_template": [
+              {
+                "role": "user",
+                "text": "你是医药器械采购项目分析报告修订助手。你的任务是在同一 Dify 会话中，根据用户新的修改要求，对当前 ReportIR 做定向修订。\n\n修订原则：\n1. 用户反馈修订只能基于 source_evidence、当前 ReportIR、当前 Markdown 正文和用户反馈；不允许脱离原文新增事实。\n2. 不得新增网页或附件没有的事实，不允许根据常识或历史稿补写本次公告未披露的规则、价格、周期、企业范围、产品范围、地区范围、采购量或时间节点。\n3. 如果用户要求加入原文没有的内容，应在正文中克制说明“文件未披露”或“待后续公告明确”，不要编造。\n4. 如果提供了 history_insights，只能用于一句或一段简短历史承接；不得新增“历史对照”“历史分析”等标题；不得把历史 Word 的事实写成本次公告事实。\n5. 保留 ReportIR 结构，优先小范围修改用户要求涉及的段落、表格、highlights 或企业关注点。\n6. 除非用户明确要求删除，否则保留已经通过质检的规则小节、表格和企业关注点。\n7. 保留非中选产品管理、名词解释、价格联动、报价规则、中选规则等原文已有规则，不要在修订中压缩丢失。\n8. 如果用户只要求格式微调，例如“名词解释加序号、单独分段”，只修改对应 section，其他 section、表格、highlights、enterprise_tips 原样保留。\n9. 名词解释 section 中每一个名词解释必须单独成为一个 paragraph，并使用阿拉伯数字序号，格式为“1. 带量最低价：指……”“2. 非带量最低价：指……”。不要把多个名词解释合并在同一段。\n10. 如果用户输入的是“质检摘要”“一般问题明细”“事实依据问题明细”“缺失规则明细”“修复建议”等 QA 缺陷文本，先把缺陷整理成内部 checklist，再逐项落实到 ReportIR；不要把质检摘要原文写进报告。\n11. 对流程调整、挂网操作调整、数据核对、价格核实确认类公告，若用户或质检要求补充结构，正文必须至少形成 3 个有效小节，且小节含义清晰：\n    - “调整内容”或“核查内容”：说明公告要求企业具体做什么；\n    - “影响分析”：分析对挂网、交易资格、医院供应、申报节奏或履约风险的影响；\n    - “企业关注点”或“操作建议”：给出企业需要核对、反馈、整改或留痕的事项。\n12. 如果质检要求删除 unsupported_claims，必须从对应段落、表格和企业关注点中同步删除或改成“文件未披露/原文未说明”，不得换一种说法继续保留。\n13. 如果质检指出缺少“影响分析与操作建议”等固定小节，必须新增独立 section，不要只在导语或列表中轻描淡写补一句。\n14. 如果质检反馈中包含“核对表格《...》中的‘...’”这类表格证据问题，必须逐条定位表格标题和数值：先在原始证据中查找原值及其等价写法（包括真实换行、JSON 转义换行、空格断行、日期断行，例如“2026\\n年2月1日”“2026\\\\n年2月1日”“2026 年 2 月 1 日”均等价于“2026年2月1日”）。如果证据中存在等价写法，应保留该事实并规范化为通顺中文；如果证据中确实不存在，才从对应段落、表格和企业关注点删除或改为“原文未披露”。\n15. 如果修复建议要求“删除无证据数值或改为原文披露内容”，且证据中找不到对应等价写法，修订后的 ReportIR 不得继续保留原数值。必须直接修改对应表格 cell、同段落文字、highlights 和 enterprise_tips 中的相同数值；如果反馈指出的是整列或整行的无证据数值，例如“占比”列、百分比列、价格列或日期列，应把所有被点名的 cell 逐个替换为“文件未披露/原文未说明”，或删除该列/行。不要只保留备注、不要只解释“按表内数据测算”、不要只在质检摘要里承认问题而不改表格。\n15a. 价格表修订时优先保持附件原始表格口径：如果表头已写“价格（元）”“挂网价格（元）”“全国较低价格（元）”，cell 中优先使用原始数字，不要再追加“元”；单位放表头或备注。若质检反馈的 `source_quote` 为空且只是提示“核对表格中的某个价格”，不要自行新增型号数量、占比、价格分布等统计。\n15b. 若无法在 source_evidence 中确认被点名价格或同一产品行，优先删除对应示例行，或将该行改为“具体价格详见附件清单”；不要改写成“58元或65元（依型号而定）”“34个为58元、15个为65元”等新概括，除非 source_evidence 明确提供这些统计口径。\n16. 输出前必须自检：用户反馈或质检摘要中被点名且判定无证据的数值，不能再出现在最终 ReportIR JSON 的任何字符串中；只有在 source_evidence 中确认存在等价写法时才允许保留。\n17. 必须输出完整 ReportIR JSON，不能只输出修改片段、Markdown、说明文字或空回复。\n18. 不输出 <think>、analysis、scratchpad、debug、Dify 变量、临时声明或水印相关内容。\n\n输出格式：\n只输出 <report_ir> 结构化 JSON，一个区域即可；不要输出 Markdown 正文，不要输出 final_report，不要在区域外输出文字。Dify 展示正文和 Word 文件将由后端根据 ReportIR 渲染生成。\nJSON 必须可被严格解析。所有字符串内部如需引用术语，请优先使用中文引号“……”或书名号《……》；不要在字符串内部直接使用未转义的英文半角双引号 \"。如必须使用半角双引号，必须写成 \\\"。\n\n<report_ir>\n{\n  \"title\": \"\",\n  \"suggested_filename\": \"\",\n  \"notice_type\": \"\",\n  \"publish_date\": \"\",\n  \"source_agency\": \"\",\n  \"document_name\": \"\",\n  \"lead_paragraphs\": [],\n  \"sections\": [\n    {\n      \"heading\": \"\",\n      \"paragraphs\": [],\n      \"tables\": [\n        {\n          \"title\": \"\",\n          \"headers\": [],\n          \"rows\": [],\n          \"notes\": []\n        }\n      ],\n      \"highlights\": []\n    }\n  ],\n  \"enterprise_tips\": [],\n  \"disclaimer\": \"\"\n}\n</report_ir>\n\n原始证据：\n{{#conversation.source_evidence#}}\n\n历史知识摘要（可为空）：\n{{#conversation.history_insights#}}\n\n当前 ReportIR：\n{{#conversation.current_report_ir#}}\n\n当前 Markdown 正文：\n{{#conversation.current_final_report#}}\n\n用户修改要求：\n{{#sys.query#}}\n"
+              }
+            ],
+            "retry_config": {
+              "enabled": false,
+              "exponential_backoff": {
+                "enabled": false,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "structured_output": {
+              "enabled": false
+            },
+            "variables": [],
+            "vision": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "id": "build_revised_render_payload",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 930,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 930,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Build Revised Render Payload",
+            "type": "code",
+            "code": "def main(report: str) -> dict:\n    import json\n    payload = {\n        \"markdown\": report or \"\",\n        \"strict_quality\": False,\n    }\n    return {\"payload\": json.dumps(payload, ensure_ascii=False)}\n",
+            "code_language": "python3",
+            "outputs": {
+              "payload": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "revise_report",
+                  "text"
+                ],
+                "variable": "report"
+              }
+            ]
+          }
+        },
+        {
+          "id": "render_revised_report",
+          "type": "custom",
+          "height": 150,
+          "width": 242,
+          "position": {
+            "x": 1230,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 1230,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Render Revised Report",
+            "type": "http-request",
+            "authorization": {
+              "config": null,
+              "type": "no-auth"
+            },
+            "body": {
+              "type": "json",
+              "data": [
+                {
+                  "key": "",
+                  "type": "text",
+                  "value": "{{#build_revised_render_payload.payload#}}"
+                }
+              ]
+            },
+            "headers": "Content-Type:application/json",
+            "method": "post",
+            "params": "",
+            "url": "http://192.168.34.88:8099/report/render",
+            "retry_config": {
+              "enabled": true,
+              "exponential_backoff": {
+                "enabled": true,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "ssl_verify": true,
+            "timeout": {
+              "connect": 10,
+              "read": 120,
+              "write": 30
+            },
+            "variables": []
+          }
+        },
+        {
+          "id": "parse_revised_render",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 1530,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 1530,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Parse Revised Render",
+            "type": "code",
+            "code": "def main(render_body: str, previous_report_ir: str, previous_report_markdown: str) -> dict:\n    import json\n    try:\n        data = json.loads(render_body or \"{}\")\n    except Exception:\n        data = {\"success\": False, \"error\": \"render endpoint returned non-JSON\"}\n    report_ir = data.get(\"report_ir\")\n    report_markdown = data.get(\"report_markdown\") or \"\"\n    error = data.get(\"error\") or \"\"\n    if data.get(\"success\") and report_ir and report_markdown:\n        return {\n            \"report_ir\": json.dumps(report_ir, ensure_ascii=False),\n            \"report_markdown\": report_markdown,\n            \"render_error\": \"\",\n            \"render_success\": \"true\",\n            \"revision_note\": \"修订已完成。\",\n        }\n    return {\n        \"report_ir\": previous_report_ir or \"{}\",\n        \"report_markdown\": previous_report_markdown or \"\",\n        \"render_error\": error or \"修订模型未返回可解析的 ReportIR\",\n        \"render_success\": \"false\",\n        \"revision_note\": \"本次修订未成功，已保留原报告；请重新提交修改意见或改用更稳定的修订模型。\",\n    }\n",
+            "code_language": "python3",
+            "outputs": {
+              "report_ir": {
+                "children": null,
+                "type": "string"
+              },
+              "report_markdown": {
+                "children": null,
+                "type": "string"
+              },
+              "render_error": {
+                "children": null,
+                "type": "string"
+              },
+              "render_success": {
+                "children": null,
+                "type": "string"
+              },
+              "revision_note": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "render_revised_report",
+                  "body"
+                ],
+                "variable": "render_body"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "current_report_ir"
+                ],
+                "variable": "previous_report_ir"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "current_final_report"
+                ],
+                "variable": "previous_report_markdown"
+              }
+            ]
+          }
+        },
+        {
+          "id": "qa_revised_report",
+          "type": "custom",
+          "height": 126,
+          "width": 242,
+          "position": {
+            "x": 1830,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 1830,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "QA Revised Report",
+            "type": "llm",
+            "context": {
+              "enabled": false,
+              "variable_selector": []
+            },
+            "memory": {
+              "enabled": false,
+              "window": {
+                "enabled": false,
+                "size": 50
+              },
+              "role_prefix": {
+                "user": "",
+                "assistant": ""
+              }
+            },
+            "model": {
+              "provider": "langgenius/tongyi/tongyi",
+              "name": "qwen-plus-latest",
+              "mode": "chat",
+              "completion_params": {
+                "temperature": 0.0,
+                "max_tokens": 8192,
+                "response_format": "text",
+                "thinking": false
+              }
+            },
+            "prompt_template": [
+              {
+                "role": "user",
+                "text": "你是医药器械采购项目分析报告质检助手。你的任务是核对生成报告是否忠实于公告原文和附件证据，是否错误使用历史分析稿，是否存在语言和结构问题。\n\n质检重点：\n1. 检查报告中的发布时间、发布主体、文件名称、采购品种、采购周期、价格、比例、时间节点、企业名称、注册证口径、医保编码、处罚后果是否有原文依据。\n2. 检查是否出现纯大模型发挥、没有来源依据的判断、绝对化结论或营销化表述。\n3. 检查 ReportIR 与 final_report 是否一致，是否遗漏原文明确的关键规则。\n4. 检查 history_leakage：是否把历史 Word 的规则、价格、周期、企业范围、产品范围、地区范围、采购量、时间节点写成本次公告事实；是否为历史分析新增“历史对照”“历史分析”等标题；是否把历史内容做成独立章节或表格。\n5. 若历史内容被使用，只能是带限定语的一段简短承接，且不得含历史稿具体数值或规则。\n6. 检查是否包含 <think>、analysis、scratchpad、debug、chain-of-thought、Dify 变量、prompt 内容、JSON 原文泄漏或临时声明。\n7. 不输出推理过程，只输出 JSON。\n\n补充质检要求：\n8. 逐表检查：对 ReportIR 和 final_report 中每个表格的表格标题、表头、关键数值、单位、备注口径逐项核对原始公告和附件证据；凡证据中找不到或口径被改写的，列入 unsupported_claims。\n9. 对占比、比例、百分比这类派生值，如果报告明确标注“按表内数据测算”或“计算值”，且原始证据中存在可计数的表格记录、分类或数量基础，不要仅因原文未逐字披露该百分比而列为 unsupported_claims；但未说明测算口径、缺少基础数量、或金额/价格/日期等非百分比数值仍必须逐项核验原文依据。\n9a. 价格表格允许单位等价：如果报告表头或证据表头已经写明“价格（元）”“挂网价格（元）”“全国较低价格（元）”，且同一产品/同一行上下文中能找到裸数字 58、65、47，则报告中写成 58元、65元、47元不应仅因缺少连续字符串“58元”而判为 unsupported_claims；但跨产品拼接、无同一行依据或自行统计型号数量仍应指出。\n10. 检查报告是否接近人工行业分析稿结构：证据丰富时不要写成短摘要；若采购文件包含多类规则而报告只有少量概括段落，或正文不足约 1800 字，应列为 major 的结构和完整性问题，并要求补充导语、规则小节、分主题表格和企业关注点。\n\n严重程度建议：\n- blocker：JSON 非法、明显脱离原文、历史事实泄漏为本次事实、Word 不应导出的严重问题。\n- major：关键规则缺失、无依据价格/周期/范围、口径混淆、历史新增标题。\n- minor：语言不够克制、格式轻微问题、可自动修复的表述。\n\n只输出以下 JSON，不要输出 Markdown 代码块以外的说明，也不要输出思考过程：\n\n{\n  \"status\": \"pass | needs_fix | block\",\n  \"issues\": [\n    {\n      \"severity\": \"minor | major | blocker\",\n      \"category\": \"\",\n      \"report_text\": \"\",\n      \"source_quote\": \"\",\n      \"fix_instruction\": \"\"\n    }\n  ],\n  \"unsupported_claims\": [],\n  \"history_leakage\": [],\n  \"missing_rules\": [],\n  \"language_issues\": [],\n  \"fix_instructions\": [],\n  \"summary\": \"\"\n}\n\n原始公告和附件证据：\n{{#conversation.source_evidence#}}\n\n历史知识摘要（可为空，只能用于识别误用风险）：\n{{#conversation.history_insights#}}\n\nReportIR：\n{{#parse_revised_render.report_ir#}}\n\nfinal_report：\n{{#parse_revised_render.report_markdown#}}\n"
+              }
+            ],
+            "retry_config": {
+              "enabled": false,
+              "exponential_backoff": {
+                "enabled": false,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "structured_output": {
+              "enabled": false
+            },
+            "variables": [],
+            "vision": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "id": "build_revised_qa_payload",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 2130,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 2130,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Build Revised QA Payload",
+            "type": "code",
+            "code": "def main(qa_output: str, report_ir: str, report_markdown: str, evidence: str, history: str) -> dict:\n    import json\n    MAX_PAYLOAD_CHARS = 110000\n\n    def truncate_payload_fields(payload):\n        field_limits = [\n            (\"evidence_text\", 60000),\n            (\"history_text\", 12000),\n            (\"report_text\", 16000),\n            (\"qa_output\", 8000),\n        ]\n        for key, limit in field_limits:\n            value = payload.get(key)\n            if isinstance(value, str) and len(value) > limit:\n                payload[key] = value[:limit] + \"\\n[内容过长，已截断]\"\n        while len(json.dumps(payload, ensure_ascii=False)) > MAX_PAYLOAD_CHARS:\n            changed = False\n            for key, _limit in field_limits:\n                value = payload.get(key)\n                if isinstance(value, str) and len(value) > 2000:\n                    payload[key] = value[: max(2000, int(len(value) * 0.75))] + \"\\n[内容过长，已截断]\"\n                    changed = True\n                    break\n            if not changed:\n                break\n        return payload\n\n    try:\n        parsed_report_ir = json.loads(report_ir or \"{}\")\n    except Exception:\n        parsed_report_ir = None\n    payload = {\n        \"qa_output\": qa_output or \"\",\n        \"report_ir\": parsed_report_ir,\n        \"report_text\": report_markdown or report_ir or \"\",\n        \"history_text\": history or \"\",\n        \"evidence_text\": evidence or \"\",\n    }\n    payload = truncate_payload_fields(payload)\n    return {\"payload\": json.dumps(payload, ensure_ascii=False)}\n",
+            "code_language": "python3",
+            "outputs": {
+              "payload": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "qa_revised_report",
+                  "text"
+                ],
+                "variable": "qa_output"
+              },
+              {
+                "value_selector": [
+                  "parse_revised_render",
+                  "report_ir"
+                ],
+                "variable": "report_ir"
+              },
+              {
+                "value_selector": [
+                  "parse_revised_render",
+                  "report_markdown"
+                ],
+                "variable": "report_markdown"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "source_evidence"
+                ],
+                "variable": "evidence"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "history_insights"
+                ],
+                "variable": "history"
+              }
+            ]
+          }
+        },
+        {
+          "id": "parse_qa_revised",
+          "type": "custom",
+          "height": 150,
+          "width": 242,
+          "position": {
+            "x": 2430,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 2430,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Parse Revised QA",
+            "type": "http-request",
+            "authorization": {
+              "config": null,
+              "type": "no-auth"
+            },
+            "body": {
+              "type": "json",
+              "data": [
+                {
+                  "key": "",
+                  "type": "text",
+                  "value": "{{#build_revised_qa_payload.payload#}}"
+                }
+              ]
+            },
+            "headers": "Content-Type:application/json",
+            "method": "post",
+            "params": "",
+            "url": "http://192.168.34.88:8099/report/qa",
+            "retry_config": {
+              "enabled": true,
+              "exponential_backoff": {
+                "enabled": true,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "ssl_verify": true,
+            "timeout": {
+              "connect": 10,
+              "read": 120,
+              "write": 30
+            },
+            "variables": []
+          }
+        },
+        {
+          "id": "read_qa_revised",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 2730,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 2730,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Read Revised QA",
+            "type": "code",
+            "code": "def main(qa_body: str) -> dict:\n    import json\n    try:\n        data = json.loads(qa_body or \"{}\")\n    except Exception:\n        data = {\"success\": False, \"qa_summary\": \"质检接口返回非 JSON\"}\n    qa = data.get(\"qa\") or {}\n    summary = data.get(\"qa_summary\") or qa.get(\"summary\") or \"\"\n    status = qa.get(\"status\") or data.get(\"status\") or \"\"\n    return {\n        \"qa_summary\": summary,\n        \"qa_status\": status,\n        \"qa_body\": json.dumps(data, ensure_ascii=False),\n    }\n",
+            "code_language": "python3",
+            "outputs": {
+              "qa_summary": {
+                "children": null,
+                "type": "string"
+              },
+              "qa_status": {
+                "children": null,
+                "type": "string"
+              },
+              "qa_body": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "parse_qa_revised",
+                  "body"
+                ],
+                "variable": "qa_body"
+              }
+            ]
+          }
+        },
+        {
+          "id": "update_repair_state",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 2880,
+            "y": 900
+          },
+          "positionAbsolute": {
+            "x": 2880,
+            "y": 900
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Update Repair State",
+            "type": "code",
+            "code": "def main(qa_status: str, previous_repair_attempt_count: str) -> dict:\n    status = (qa_status or \"pass\").strip().lower().replace(\"-\", \"_\")\n    try:\n        previous = int((previous_repair_attempt_count or \"0\").strip())\n    except Exception:\n        previous = 0\n    count = previous + 1 if status == \"needs_fix\" else 0\n    guard_notice = \"\"\n    if count >= 3 and status == \"needs_fix\":\n        guard_notice = (\n            \"\\n\\n已达到修复上限（连续 3 次 needs_fix）。请不要继续粘贴同类修复建议；\"\n            \"建议重新生成，或人工核对附件证据后再处理。\"\n        )\n    return {\n        \"repair_attempt_count\": str(count),\n        \"repair_guard_notice\": guard_notice,\n    }\n",
+            "code_language": "python3",
+            "outputs": {
+              "repair_attempt_count": {
+                "children": null,
+                "type": "string"
+              },
+              "repair_guard_notice": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "read_qa_revised",
+                  "qa_status"
+                ],
+                "variable": "qa_status"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "repair_attempt_count"
+                ],
+                "variable": "previous_repair_attempt_count"
+              }
+            ]
+          }
+        },
+        {
+          "id": "assign_revised_report",
+          "type": "custom",
+          "height": 92,
+          "width": 242,
+          "position": {
+            "x": 3030,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 3030,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Save Revised Report",
+            "type": "assigner",
+            "items": [
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "parse_revised_render",
+                  "report_ir"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "current_report_ir"
+                ]
+              },
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "parse_revised_render",
+                  "report_markdown"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "current_final_report"
+                ]
+              },
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "read_qa_revised",
+                  "qa_summary"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "last_qa_summary"
+                ]
+              },
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "update_repair_state",
+                  "repair_attempt_count"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "repair_attempt_count"
+                ]
+              }
+            ],
+            "isInIteration": false,
+            "isInLoop": false,
+            "version": "2"
+          }
+        },
+        {
+          "id": "answer_revised",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 3330,
+            "y": 760
+          },
+          "positionAbsolute": {
+            "x": 3330,
+            "y": 760
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Answer Revised Report",
+            "type": "answer",
+            "answer": "{{#parse_revised_render.revision_note#}}\n\n{{#conversation.current_final_report#}}\n\n---\n\n质检摘要：\n{{#conversation.last_qa_summary#}}{{#update_repair_state.repair_guard_notice#}}\n\nWord 下载仍需你确认后生成。",
+            "variables": []
+          }
+        },
+        {
+          "id": "answer_repair_limit",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 930,
+            "y": 620
+          },
+          "positionAbsolute": {
+            "x": 930,
+            "y": 620
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Answer Repair Limit",
+            "type": "answer",
+            "answer": "已达到修复上限（连续 3 次 needs_fix）。请不要继续粘贴同类修复建议；建议重新生成，或人工核对附件证据后再处理。若认可当前报告，可回复“确认下载 Word”继续导出。",
+            "variables": []
+          }
+        },
+        {
+          "id": "build_export_payload",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 630,
+            "y": 80
+          },
+          "positionAbsolute": {
+            "x": 630,
+            "y": 80
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Build Export Payload",
+            "type": "code",
+            "code": "def main(report_ir: str, report_markdown: str, evidence: str, history: str) -> dict:\n    import json\n    MAX_PAYLOAD_CHARS = 110000\n\n    def truncate_payload_fields(payload):\n        field_limits = [\n            (\"evidence_text\", 60000),\n            (\"history_text\", 12000),\n            (\"report_text\", 16000),\n        ]\n        for key, limit in field_limits:\n            value = payload.get(key)\n            if isinstance(value, str) and len(value) > limit:\n                payload[key] = value[:limit] + \"\\n[内容过长，已截断]\"\n        while len(json.dumps(payload, ensure_ascii=False)) > MAX_PAYLOAD_CHARS:\n            changed = False\n            for key, _limit in field_limits:\n                value = payload.get(key)\n                if isinstance(value, str) and len(value) > 2000:\n                    payload[key] = value[: max(2000, int(len(value) * 0.75))] + \"\\n[内容过长，已截断]\"\n                    changed = True\n                    break\n            if not changed:\n                break\n        return payload\n\n    try:\n        parsed_report_ir = json.loads(report_ir or \"{}\")\n    except Exception:\n        parsed_report_ir = None\n    qa_output = {\n        \"status\": \"pass\",\n        \"issues\": [],\n        \"unsupported_claims\": [],\n        \"history_leakage\": [],\n        \"missing_rules\": [],\n        \"language_issues\": [],\n        \"fix_instructions\": [],\n        \"summary\": \"用户确认后导出 Word\",\n    }\n    payload = {\n        \"report_ir\": parsed_report_ir,\n        \"qa_output\": json.dumps(qa_output, ensure_ascii=False),\n        \"report_text\": report_markdown or report_ir or \"\",\n        \"history_text\": history or \"\",\n        \"evidence_text\": evidence or \"\",\n        \"strict_quality\": False,\n    }\n    payload = truncate_payload_fields(payload)\n    return {\"payload\": json.dumps(payload, ensure_ascii=False)}\n",
+            "code_language": "python3",
+            "outputs": {
+              "payload": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "conversation",
+                  "current_report_ir"
+                ],
+                "variable": "report_ir"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "current_final_report"
+                ],
+                "variable": "report_markdown"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "source_evidence"
+                ],
+                "variable": "evidence"
+              },
+              {
+                "value_selector": [
+                  "conversation",
+                  "history_insights"
+                ],
+                "variable": "history"
+              }
+            ]
+          }
+        },
+        {
+          "id": "export_word",
+          "type": "custom",
+          "height": 150,
+          "width": 242,
+          "position": {
+            "x": 930,
+            "y": 80
+          },
+          "positionAbsolute": {
+            "x": 930,
+            "y": 80
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Export Word",
+            "type": "http-request",
+            "authorization": {
+              "config": null,
+              "type": "no-auth"
+            },
+            "body": {
+              "type": "json",
+              "data": [
+                {
+                  "key": "",
+                  "type": "text",
+                  "value": "{{#build_export_payload.payload#}}"
+                }
+              ]
+            },
+            "headers": "Content-Type:application/json",
+            "method": "post",
+            "params": "",
+            "url": "http://192.168.34.88:8099/report/export_checked",
+            "retry_config": {
+              "enabled": true,
+              "exponential_backoff": {
+                "enabled": true,
+                "max_interval": 10000,
+                "multiplier": 2
+              },
+              "max_retries": 2,
+              "retry_interval": 1000
+            },
+            "ssl_verify": true,
+            "timeout": {
+              "connect": 10,
+              "read": 120,
+              "write": 30
+            },
+            "variables": []
+          }
+        },
+        {
+          "id": "parse_export",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 1230,
+            "y": 80
+          },
+          "positionAbsolute": {
+            "x": 1230,
+            "y": 80
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Parse Export",
+            "type": "code",
+            "code": "def main(export_body: str) -> dict:\n    import json\n    try:\n        data = json.loads(export_body or \"{}\")\n    except Exception:\n        data = {\"success\": False, \"error\": \"export endpoint returned non-JSON\"}\n    success = bool(data.get(\"success\"))\n    blocked = bool(data.get(\"blocked\"))\n    download_url = data.get(\"download_url\") or \"\"\n    filename = data.get(\"filename\") or \"\"\n    qa_summary = data.get(\"qa_summary\") or data.get(\"error\") or \"\"\n    if success and download_url:\n        answer = \"已生成 Word。\\n下载链接：%s\\n文件名：%s\" % (download_url, filename)\n    elif blocked:\n        answer = \"Word 导出失败：\\n%s\" % (qa_summary or \"导出接口未返回下载链接\")\n    else:\n        answer = \"Word 导出失败：%s\" % (qa_summary or \"请先生成并确认报告\")\n    return {\n        \"answer\": answer,\n        \"download_url\": download_url,\n        \"filename\": filename,\n        \"qa_summary\": qa_summary,\n    }\n",
+            "code_language": "python3",
+            "outputs": {
+              "answer": {
+                "children": null,
+                "type": "string"
+              },
+              "download_url": {
+                "children": null,
+                "type": "string"
+              },
+              "filename": {
+                "children": null,
+                "type": "string"
+              },
+              "qa_summary": {
+                "children": null,
+                "type": "string"
+              }
+            },
+            "variables": [
+              {
+                "value_selector": [
+                  "export_word",
+                  "body"
+                ],
+                "variable": "export_body"
+              }
+            ]
+          }
+        },
+        {
+          "id": "assign_export_state",
+          "type": "custom",
+          "height": 92,
+          "width": 242,
+          "position": {
+            "x": 1530,
+            "y": 80
+          },
+          "positionAbsolute": {
+            "x": 1530,
+            "y": 80
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Save Export Filename",
+            "type": "assigner",
+            "items": [
+              {
+                "input_type": "variable",
+                "operation": "over-write",
+                "write_mode": "over-write",
+                "value": [
+                  "parse_export",
+                  "filename"
+                ],
+                "variable_selector": [
+                  "conversation",
+                  "last_export_filename"
+                ]
+              }
+            ],
+            "isInIteration": false,
+            "isInLoop": false,
+            "version": "2"
+          }
+        },
+        {
+          "id": "answer_download",
+          "type": "custom",
+          "height": 112,
+          "width": 242,
+          "position": {
+            "x": 1830,
+            "y": 80
+          },
+          "positionAbsolute": {
+            "x": 1830,
+            "y": 80
+          },
+          "selected": false,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "desc": "",
+            "selected": false,
+            "title": "Answer Download",
+            "type": "answer",
+            "answer": "{{#parse_export.answer#}}",
+            "variables": []
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "start-to-classify",
+          "source": "start_node",
+          "sourceHandle": "source",
+          "target": "classify_turn",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "start",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "classify-to-route",
+          "source": "classify_turn",
+          "sourceHandle": "source",
+          "target": "route_turn",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "if-else"
+          }
+        },
+        {
+          "id": "route_approve-to-export_word",
+          "source": "route_turn",
+          "sourceHandle": "approve",
+          "target": "build_export_payload",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "if-else",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "route_first-to-history_file_gate",
+          "source": "route_turn",
+          "sourceHandle": "first",
+          "target": "history_file_gate",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "if-else",
+            "targetType": "if-else"
+          }
+        },
+        {
+          "id": "route_repair_limit-to-answer",
+          "source": "route_turn",
+          "sourceHandle": "repair_limit",
+          "target": "answer_repair_limit",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "if-else",
+            "targetType": "answer"
+          }
+        },
+        {
+          "id": "route_revise-to-revise_report",
+          "source": "route_turn",
+          "sourceHandle": "false",
+          "target": "revise_report",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "if-else",
+            "targetType": "llm"
+          }
+        },
+        {
+          "id": "history-has-to-extract",
+          "source": "history_file_gate",
+          "sourceHandle": "has_history",
+          "target": "history_doc_extractor",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "if-else",
+            "targetType": "document-extractor"
+          }
+        },
+        {
+          "id": "history-empty-to-clear",
+          "source": "history_file_gate",
+          "sourceHandle": "false",
+          "target": "empty_history",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "if-else",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "extract-to-summarize",
+          "source": "history_doc_extractor",
+          "sourceHandle": "source",
+          "target": "summarize_history",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "document-extractor",
+            "targetType": "llm"
+          }
+        },
+        {
+          "id": "summarize-to-parse-history",
+          "source": "summarize_history",
+          "sourceHandle": "source",
+          "target": "parse_history",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "llm",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "parse-history-to-assign-history",
+          "source": "parse_history",
+          "sourceHandle": "source",
+          "target": "assign_history",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "assigner"
+          }
+        },
+        {
+          "id": "empty-history-to-assign",
+          "source": "empty_history",
+          "sourceHandle": "source",
+          "target": "assign_empty_history",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "assigner"
+          }
+        },
+        {
+          "id": "assign-history-to-fetch",
+          "source": "assign_history",
+          "sourceHandle": "source",
+          "target": "fetch_source",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "assigner",
+            "targetType": "http-request"
+          }
+        },
+        {
+          "id": "assign-empty-history-to-fetch",
+          "source": "assign_empty_history",
+          "sourceHandle": "source",
+          "target": "fetch_source",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "assigner",
+            "targetType": "http-request"
+          }
+        },
+        {
+          "id": "fetch-to-parse-source",
+          "source": "fetch_source",
+          "sourceHandle": "source",
+          "target": "parse_source_evidence",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "http-request",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "parse-source-to-assign-source",
+          "source": "parse_source_evidence",
+          "sourceHandle": "source",
+          "target": "assign_source",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "assigner"
+          }
+        },
+        {
+          "id": "assign-source-to-generate",
+          "source": "assign_source",
+          "sourceHandle": "source",
+          "target": "generate_report",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "assigner",
+            "targetType": "llm"
+          }
+        },
+        {
+          "id": "generate-to-build-render",
+          "source": "generate_report",
+          "sourceHandle": "source",
+          "target": "build_render_payload",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "llm",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "build-render-to-render",
+          "source": "build_render_payload",
+          "sourceHandle": "source",
+          "target": "render_report",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "http-request"
+          }
+        },
+        {
+          "id": "render-to-parse",
+          "source": "render_report",
+          "sourceHandle": "source",
+          "target": "parse_render",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "http-request",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "parse-to-qa",
+          "source": "parse_render",
+          "sourceHandle": "source",
+          "target": "qa_report_first",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "llm"
+          }
+        },
+        {
+          "id": "qa-to-build-payload",
+          "source": "qa_report_first",
+          "sourceHandle": "source",
+          "target": "build_qa_payload",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "llm",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "qa-payload-to-parse",
+          "source": "build_qa_payload",
+          "sourceHandle": "source",
+          "target": "parse_qa_first",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "http-request"
+          }
+        },
+        {
+          "id": "parse-qa-to-read",
+          "source": "parse_qa_first",
+          "sourceHandle": "source",
+          "target": "read_qa_first",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "http-request",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "read-qa-to-reset-repair",
+          "source": "read_qa_first",
+          "sourceHandle": "source",
+          "target": "reset_repair_state",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "reset-repair-to-assign",
+          "source": "reset_repair_state",
+          "sourceHandle": "source",
+          "target": "assign_initial_report",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "assigner"
+          }
+        },
+        {
+          "id": "assign-to-answer-initial",
+          "source": "assign_initial_report",
+          "sourceHandle": "source",
+          "target": "answer_initial",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "assigner",
+            "targetType": "answer"
+          }
+        },
+        {
+          "id": "revise-to-build-render",
+          "source": "revise_report",
+          "sourceHandle": "source",
+          "target": "build_revised_render_payload",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "llm",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "build-revised-to-render",
+          "source": "build_revised_render_payload",
+          "sourceHandle": "source",
+          "target": "render_revised_report",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "http-request"
+          }
+        },
+        {
+          "id": "render-revised-to-parse",
+          "source": "render_revised_report",
+          "sourceHandle": "source",
+          "target": "parse_revised_render",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "http-request",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "parse-revised-to-qa",
+          "source": "parse_revised_render",
+          "sourceHandle": "source",
+          "target": "qa_revised_report",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "llm"
+          }
+        },
+        {
+          "id": "qa-revised-to-build",
+          "source": "qa_revised_report",
+          "sourceHandle": "source",
+          "target": "build_revised_qa_payload",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "llm",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "build-revised-qa-to-parse",
+          "source": "build_revised_qa_payload",
+          "sourceHandle": "source",
+          "target": "parse_qa_revised",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "http-request"
+          }
+        },
+        {
+          "id": "parse-revised-qa-to-read",
+          "source": "parse_qa_revised",
+          "sourceHandle": "source",
+          "target": "read_qa_revised",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "http-request",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "read-revised-to-update-repair",
+          "source": "read_qa_revised",
+          "sourceHandle": "source",
+          "target": "update_repair_state",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "update-repair-to-assign",
+          "source": "update_repair_state",
+          "sourceHandle": "source",
+          "target": "assign_revised_report",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "assigner"
+          }
+        },
+        {
+          "id": "assign-revised-to-answer",
+          "source": "assign_revised_report",
+          "sourceHandle": "source",
+          "target": "answer_revised",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "assigner",
+            "targetType": "answer"
+          }
+        },
+        {
+          "id": "export-payload-to-export",
+          "source": "build_export_payload",
+          "sourceHandle": "source",
+          "target": "export_word",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "http-request"
+          }
+        },
+        {
+          "id": "export-to-parse",
+          "source": "export_word",
+          "sourceHandle": "source",
+          "target": "parse_export",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "http-request",
+            "targetType": "code"
+          }
+        },
+        {
+          "id": "parse-export-to-assign",
+          "source": "parse_export",
+          "sourceHandle": "source",
+          "target": "assign_export_state",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "code",
+            "targetType": "assigner"
+          }
+        },
+        {
+          "id": "assign-export-to-answer",
+          "source": "assign_export_state",
+          "sourceHandle": "source",
+          "target": "answer_download",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "isInIteration": false,
+            "isInLoop": false,
+            "sourceType": "assigner",
+            "targetType": "answer"
+          }
+        }
+      ],
+      "viewport": {
+        "x": 0,
+        "y": 0,
+        "zoom": 0.42
+      }
+    },
+    "rag_pipeline_variables": []
+  }
+}

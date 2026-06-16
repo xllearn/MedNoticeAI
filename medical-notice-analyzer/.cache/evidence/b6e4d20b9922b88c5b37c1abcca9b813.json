@@ -1,0 +1,40 @@
+{
+  "run_id": "4434fdfa-c452-4d0b-8bef-67edb8f5c847",
+  "content_hash": "b6e4d20b9922b88c5b37c1abcca9b813",
+  "evidence_pack": {
+    "source_url": "https://example.com/notice",
+    "final_url": "https://example.com/notice",
+    "notice_summary": {
+      "title": "Notice Title",
+      "publish_date": "2026-06-10",
+      "source_agency": "",
+      "document_name": "Notice Title",
+      "notice_type_hint": ""
+    },
+    "mandatory_facts": [
+      {
+        "name": "title",
+        "value": "Notice Title",
+        "source_ref": "main_page"
+      },
+      {
+        "name": "publish_date",
+        "value": "2026-06-10",
+        "source_ref": "main_page"
+      }
+    ],
+    "key_rules": [],
+    "tables_summary": [],
+    "attachments": [],
+    "source_index": [
+      {
+        "ref": "main_page",
+        "type": "html",
+        "title": "Notice Title",
+        "url": "https://example.com/notice"
+      }
+    ],
+    "warnings": [],
+    "main_page_excerpt": "Published: 2026-06-10\nProcurement rule text."
+  }
+}

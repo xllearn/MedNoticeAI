@@ -1,0 +1,364 @@
+{
+  "run_id": "294fbc8b-6e62-4da9-a23f-055650b0e1b2",
+  "content_hash": "40bd9e7a33c225f7de0000c5707d29dc",
+  "evidence_pack": {
+    "source_url": "https://example.com/notice",
+    "final_url": "https://example.com/notice",
+    "notice_summary": {
+      "title": "Large CSV Notice",
+      "publish_date": "",
+      "source_agency": "",
+      "document_name": "Large CSV Notice",
+      "notice_type_hint": ""
+    },
+    "mandatory_facts": [
+      {
+        "name": "title",
+        "value": "Large CSV Notice",
+        "source_ref": "main_page"
+      }
+    ],
+    "key_rules": [],
+    "tables_summary": [
+      {
+        "source_ref": "attachment_1",
+        "sheet_name": "csv",
+        "row_count": 30051,
+        "column_count": 4,
+        "columns": [
+          "product",
+          "company",
+          "price",
+          "category"
+        ],
+        "detected_business_columns": [],
+        "product_count": 499,
+        "company_count": 17,
+        "price_min": 0.5,
+        "price_max": 99.5,
+        "price_avg": 49.9008,
+        "missing_value_summary": {},
+        "category_summary": {
+          "cat-0": 100,
+          "cat-1": 100,
+          "cat-2": 100,
+          "cat-3": 100,
+          "cat-4": 99
+        },
+        "important_rows": [
+          {
+            "product": "product-0",
+            "company": "company-0",
+            "price": "0.5",
+            "category": "cat-0"
+          },
+          {
+            "product": "product-1",
+            "company": "company-1",
+            "price": "1.5",
+            "category": "cat-1"
+          },
+          {
+            "product": "product-2",
+            "company": "company-2",
+            "price": "2.5",
+            "category": "cat-2"
+          },
+          {
+            "product": "product-3",
+            "company": "company-3",
+            "price": "3.5",
+            "category": "cat-3"
+          },
+          {
+            "product": "product-4",
+            "company": "company-4",
+            "price": "4.5",
+            "category": "cat-4"
+          },
+          {
+            "product": "product-5",
+            "company": "company-5",
+            "price": "5.5",
+            "category": "cat-0"
+          },
+          {
+            "product": "product-6",
+            "company": "company-6",
+            "price": "6.5",
+            "category": "cat-1"
+          },
+          {
+            "product": "product-7",
+            "company": "company-7",
+            "price": "7.5",
+            "category": "cat-2"
+          },
+          {
+            "product": "product-8",
+            "company": "company-8",
+            "price": "8.5",
+            "category": "cat-3"
+          },
+          {
+            "product": "product-9",
+            "company": "company-9",
+            "price": "9.5",
+            "category": "cat-4"
+          },
+          {
+            "product": "product-10",
+            "company": "company-10",
+            "price": "10.5",
+            "category": "cat-0"
+          },
+          {
+            "product": "product-11",
+            "company": "company-11",
+            "price": "11.5",
+            "category": "cat-1"
+          },
+          {
+            "product": "product-12",
+            "company": "company-12",
+            "price": "12.5",
+            "category": "cat-2"
+          },
+          {
+            "product": "product-13",
+            "company": "company-13",
+            "price": "13.5",
+            "category": "cat-3"
+          },
+          {
+            "product": "product-14",
+            "company": "company-14",
+            "price": "14.5",
+            "category": "cat-4"
+          },
+          {
+            "product": "product-15",
+            "company": "company-15",
+            "price": "15.5",
+            "category": "cat-0"
+          },
+          {
+            "product": "product-16",
+            "company": "company-16",
+            "price": "16.5",
+            "category": "cat-1"
+          },
+          {
+            "product": "product-17",
+            "company": "company-0",
+            "price": "17.5",
+            "category": "cat-2"
+          },
+          {
+            "product": "product-18",
+            "company": "company-1",
+            "price": "18.5",
+            "category": "cat-3"
+          },
+          {
+            "product": "product-19",
+            "company": "company-2",
+            "price": "19.5",
+            "category": "cat-4"
+          }
+        ],
+        "warnings": [
+          "超过5000行的大表已仅保留摘要、统计、关键行和业务口径。",
+          "大表已结构化摘要，完整明细以原始附件为准。"
+        ]
+      }
+    ],
+    "attachments": [
+      {
+        "file_name": "large.csv",
+        "url": "https://example.com/large.csv",
+        "file_type": "csv",
+        "size": 1050030,
+        "parse_status": "success",
+        "error": "",
+        "summary": "### CSV\n| product | company | price | category |\n| --- | --- | --- | --- |\n| product-0 | company-0 | 0.5 | cat-0 |\n| product-1 | company-1 | 1.5 | cat-1 |\n| product-2 | company-2 | 2.5 | cat-2 |\n| product-3 | company-3 | 3.5 | cat-3 |\n| product-4 | company-4 | 4.5 | cat-4 |\n| product-5 | company-5 | 5.5 | cat-0 |\n| product-6 | company-6 | 6.5 | cat-1 |\n| product-7 | company-7 | 7.5 | cat-2 |\n| product-8 | company-8 | 8.5 | cat-3 |\n| product-9 | company-9 | 9.5 | cat-4 |\n| product-10 | company-10 | 10.5 | cat-0 |\n| product-11 | company-11 | 11.5 | cat-1 |\n| product-12 | company-12 | 12.5 | cat-2 |\n| product-13 | company-13 | 13.5 | cat-3 |\n| product-14 | company-14 | 14.5 | cat-4 |\n| product-15 | company-15 | 15.5 | cat-0 |\n| product-16 | company-16 | 16.5 | cat-1 |\n| product-17 | company-0 | 17.5 | cat-2 |\n| product-18 | company-1 | 18.5 | cat-3 |\n| product-19 | company-2 | 19.5 | cat-4 |\n| product-20 | company-3 | 20.5 | cat-0 |\n| product-21 | company-4 | 21.5 | cat-1 |\n| product-22 | company-5 | 22.5 | cat-2 |\n| product-23 | company-6 | 23.5 | cat-3 |\n| product-24 | company-7 | 24.5 | cat-4 |\n| product-25 | company-8 | 25.5 | cat-0 |\n| product-26 | company-9 | 26.5 | cat-1 |\n| product-27 | company-10 | 27.5 | cat-2 |\n| product-28 | company-11 | 28.5 | cat-3 |\n| product-29 | com\n\n...【中间内容因长度限制被截断】...\n\n.5 | cat-2 |\n| product-103 | company-1 | 3.5 | cat-3 |\n| product-104 | company-2 | 4.5 | cat-4 |\n| product-105 | company-3 | 5.5 | cat-0 |\n| product-106 | company-4 | 6.5 | cat-1 |\n| product-107 | company-5 | 7.5 | cat-2 |\n| product-108 | company-6 | 8.5 | cat-3 |\n| product-109 | company-7 | 9.5 | cat-4 |\n| product-110 | company-8 | 10.5 | cat-0 |\n| product-111 | company-9 | 11.5 | cat-1 |\n| product-112 | company-10 | 12.5 | cat-2 |\n| product-113 | company-11 | 13.5 | cat-3 |\n| product-114 | company-12 | 14.5 | cat-4 |\n| product-115 | company-13 | 15.5 | cat-0 |\n| product-116 | company-14 | 16.5 | cat-1 |\n| product-117 | company-15 | 17.5 | cat-2 |\n| product-118 | company-16 | 18.5 | cat-3 |",
+        "tables_summary": [
+          {
+            "source_ref": "attachment_1",
+            "sheet_name": "csv",
+            "row_count": 30051,
+            "column_count": 4,
+            "columns": [
+              "product",
+              "company",
+              "price",
+              "category"
+            ],
+            "detected_business_columns": [],
+            "product_count": 499,
+            "company_count": 17,
+            "price_min": 0.5,
+            "price_max": 99.5,
+            "price_avg": 49.9008,
+            "missing_value_summary": {},
+            "category_summary": {
+              "cat-0": 100,
+              "cat-1": 100,
+              "cat-2": 100,
+              "cat-3": 100,
+              "cat-4": 99
+            },
+            "important_rows": [
+              {
+                "product": "product-0",
+                "company": "company-0",
+                "price": "0.5",
+                "category": "cat-0"
+              },
+              {
+                "product": "product-1",
+                "company": "company-1",
+                "price": "1.5",
+                "category": "cat-1"
+              },
+              {
+                "product": "product-2",
+                "company": "company-2",
+                "price": "2.5",
+                "category": "cat-2"
+              },
+              {
+                "product": "product-3",
+                "company": "company-3",
+                "price": "3.5",
+                "category": "cat-3"
+              },
+              {
+                "product": "product-4",
+                "company": "company-4",
+                "price": "4.5",
+                "category": "cat-4"
+              },
+              {
+                "product": "product-5",
+                "company": "company-5",
+                "price": "5.5",
+                "category": "cat-0"
+              },
+              {
+                "product": "product-6",
+                "company": "company-6",
+                "price": "6.5",
+                "category": "cat-1"
+              },
+              {
+                "product": "product-7",
+                "company": "company-7",
+                "price": "7.5",
+                "category": "cat-2"
+              },
+              {
+                "product": "product-8",
+                "company": "company-8",
+                "price": "8.5",
+                "category": "cat-3"
+              },
+              {
+                "product": "product-9",
+                "company": "company-9",
+                "price": "9.5",
+                "category": "cat-4"
+              },
+              {
+                "product": "product-10",
+                "company": "company-10",
+                "price": "10.5",
+                "category": "cat-0"
+              },
+              {
+                "product": "product-11",
+                "company": "company-11",
+                "price": "11.5",
+                "category": "cat-1"
+              },
+              {
+                "product": "product-12",
+                "company": "company-12",
+                "price": "12.5",
+                "category": "cat-2"
+              },
+              {
+                "product": "product-13",
+                "company": "company-13",
+                "price": "13.5",
+                "category": "cat-3"
+              },
+              {
+                "product": "product-14",
+                "company": "company-14",
+                "price": "14.5",
+                "category": "cat-4"
+              },
+              {
+                "product": "product-15",
+                "company": "company-15",
+                "price": "15.5",
+                "category": "cat-0"
+              },
+              {
+                "product": "product-16",
+                "company": "company-16",
+                "price": "16.5",
+                "category": "cat-1"
+              },
+              {
+                "product": "product-17",
+                "company": "company-0",
+                "price": "17.5",
+                "category": "cat-2"
+              },
+              {
+                "product": "product-18",
+                "company": "company-1",
+                "price": "18.5",
+                "category": "cat-3"
+              },
+              {
+                "product": "product-19",
+                "company": "company-2",
+                "price": "19.5",
+                "category": "cat-4"
+              }
+            ],
+            "warnings": [
+              "超过5000行的大表已仅保留摘要、统计、关键行和业务口径。",
+              "大表已结构化摘要，完整明细以原始附件为准。"
+            ]
+          }
+        ],
+        "evidence_refs": [
+          "attachment_1"
+        ],
+        "warnings": [
+          "大表已结构化摘要，完整明细以原始附件为准。"
+        ]
+      }
+    ],
+    "source_index": [
+      {
+        "ref": "main_page",
+        "type": "html",
+        "title": "Large CSV Notice",
+        "url": "https://example.com/notice"
+      },
+      {
+        "ref": "attachment_1",
+        "type": "attachment",
+        "title": "large.csv",
+        "url": "https://example.com/large.csv"
+      }
+    ],
+    "warnings": [],
+    "main_page_excerpt": "Large CSV Notice\nattachment"
+  }
+}
