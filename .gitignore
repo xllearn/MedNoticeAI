@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.next/
+
+# Environment / Secrets
+.env
+.env.local
+*.key
+*.pem
+*.crt
+
+# Logs
+logs/
+*.log
+
+# Runtime data
+data/
+analysis_runs/
+attachment_parse_cache/
+attachment_cache/
+temp/
+tmp/
+outputs/
+
+# Docker / local
+docker-compose.override.yml
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
