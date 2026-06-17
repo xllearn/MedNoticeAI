@@ -665,9 +665,13 @@
       const items = diag.diagnosis || [];
       const level = items.some((item) => item.level === 'error') ? 'error' : items.some((item) => item.level === 'warning') ? 'warning' : 'normal';
       const first = items[0] || { code: 'OK', message: '未发现明显问题。' };
+      const coverage = diag.coverage || {};
+      const missingItems = coverage.missing_items || [];
       $('diagnosisSummary').innerHTML = `
         <div class="diag-main ${level === 'normal' ? '' : level}">${escapeHtml(first.code || 'OK')}</div>
         <div>${escapeHtml(first.message || '')}</div>
+        <div class="hint">覆盖度：${escapeHtml(coverage.coverage_score ?? '-')}% · 缺失项 ${escapeHtml(missingItems.length || 0)} 个</div>
+        ${missingItems.length ? `<div class="hint">缺失：${escapeHtml(missingItems.slice(0, 5).map((item) => item.label).join('、'))}${missingItems.length > 5 ? '等' : ''}</div>` : ''}
       `;
       $('evidenceInfo').innerHTML = `
         <div>主材料正文</div><div>${escapeHtml(diag.evidence?.primary_content_chars ?? '-')} 字</div>
@@ -680,6 +684,8 @@
         <div>加权证据量</div><div>${escapeHtml(diag.evidence?.weighted_evidence_chars ?? '-')} 字</div>
         <div>证据包信息量</div><div>${escapeHtml(diag.evidence?.estimated_evidence_level || '-')}</div>
         <div>建议报告长度</div><div>${escapeHtml(diag.evidence?.suggested_report_length || '-')}</div>
+        <div>报告覆盖率</div><div>${escapeHtml(coverage.coverage_score ?? '-')}%</div>
+        <div>缺失覆盖项</div><div>${escapeHtml(missingItems.map((item) => item.label).slice(0, 4).join('、') || '无')}</div>
         <div>统计说明</div><div>建议报告长度根据主材料正文、附件摘要、辅助材料相关片段等加权估算。未解析附件和低相关辅助材料不会作为主要依据。</div>
       `;
       const pack = state.packDiagnostics || {};

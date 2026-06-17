@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -13,8 +14,11 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 import app.main as main_module
+from app.attachment_cache import cache_key
 from app.attachment_fetcher import AttachmentDownloadResult, build_attachment_auth_headers, fetch_attachment_bytes
+import app.attachment_parser as attachment_parser_module
 from app.attachment_parser import parse_attachment_bytes
+from app.diagnostics import build_pack_diagnostics, build_run_diagnostics
 
 
 def list_row(**overrides):
@@ -382,6 +386,92 @@ class RecordsApiTests(unittest.TestCase):
         self.assertTrue(excel_result["table_summaries"][0]["contains_product"])
         self.assertTrue(excel_result["table_summaries"][0]["contains_price"])
 
+    def test_doc_attachment_parser_converts_with_libreoffice_and_reuses_docx_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            converted_docx = main_module.Path(tmpdir) / "converted.docx"
+            doc = Document()
+            doc.add_paragraph("申报时间为2026年6月，企业需要关注价格规则。")
+            table = doc.add_table(rows=2, cols=2)
+            table.cell(0, 0).text = "企业名称"
+            table.cell(0, 1).text = "产品名称"
+            table.cell(1, 0).text = "企业A"
+            table.cell(1, 1).text = "产品B"
+            doc.save(converted_docx)
+
+            def fake_run(command, capture_output, text, timeout, check):
+                outdir = main_module.Path(command[command.index("--outdir") + 1])
+                shutil.copyfile(converted_docx, outdir / "legacy.docx")
+                return main_module.subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("app.attachment_parser.shutil.which", return_value="/usr/bin/libreoffice"), patch(
+                "app.attachment_parser.subprocess.run", side_effect=fake_run
+            ):
+                result = parse_attachment_bytes(b"legacy-binary-doc", "legacy.doc", ".doc", 1024)
+
+        self.assertIn("temp_file_parsed", result["parse_statuses"])
+        self.assertIn("parsed_text", result["parse_statuses"])
+        self.assertIn("parsed_summary", result["parse_statuses"])
+        self.assertIn("申报时间", result["summary"])
+        self.assertTrue(result["table_summaries"][0]["contains_enterprise"])
+        self.assertTrue(result["table_summaries"][0]["contains_product"])
+
+    def test_doc_attachment_parser_returns_structured_failure_when_converter_missing(self) -> None:
+        with patch("app.attachment_parser.shutil.which", return_value=None):
+            result = parse_attachment_bytes(b"legacy-binary-doc", "legacy.doc", ".doc", 1024)
+
+        self.assertEqual(result["parse_statuses"], ["parse_failed"])
+        self.assertIn("LibreOffice", result["summary"])
+        self.assertTrue(result["warnings"])
+
+    def test_excel_parser_detects_header_row_below_title_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workbook_path = main_module.Path(tmpdir) / "price-list.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "价格表"
+            ws.append(["某某项目中选结果价格表", "", "", "", ""])
+            ws.append(["企业名称", "产品名称", "注册证号", "医保编码", "中选价"])
+            ws.append(["企业A", "产品B", "证号1", "C001", "12.50"])
+            wb.save(workbook_path)
+
+            result = parse_attachment_bytes(workbook_path.read_bytes(), "price-list.xlsx", ".xlsx", workbook_path.stat().st_size)
+
+        table = result["table_summaries"][0]
+        self.assertEqual(table["headers"][:5], ["企业名称", "产品名称", "注册证号", "医保编码", "中选价"])
+        self.assertIn("企业名称", table["key_columns"])
+        self.assertTrue(table["contains_enterprise"])
+        self.assertTrue(table["contains_product"])
+        self.assertTrue(table["contains_registration_cert"])
+        self.assertTrue(table["contains_medical_insurance_code"])
+        self.assertTrue(table["contains_price"])
+
+    def test_csv_parser_streams_and_detects_header_row_below_title_row(self) -> None:
+        rows = ["某某项目产品清单,,,,", "企业名称,产品名称,注册证号,医保编码,采购量"]
+        rows.extend(f"企业{i},产品{i},证号{i},C{i},{i}" for i in range(200))
+        content = "\n".join(rows).encode("utf-8-sig")
+
+        result = parse_attachment_bytes(content, "list.csv", ".csv", len(content))
+
+        table = result["table_summaries"][0]
+        self.assertEqual(table["rows"], 202)
+        self.assertEqual(table["headers"][:5], ["企业名称", "产品名称", "注册证号", "医保编码", "采购量"])
+        self.assertTrue(table["contains_enterprise"])
+        self.assertTrue(table["contains_purchase_volume"])
+        self.assertEqual(table["sample_rows_count"], 20)
+
+    def test_old_url_attachment_discovery_includes_text_html_and_zip_files(self) -> None:
+        html = """
+        <a href="/notice.txt">附件 TXT</a>
+        <a href="/guide.html">附件 HTML</a>
+        <a href="/archive.zip">附件 ZIP</a>
+        """
+        links = main_module._discover_attachment_links(html, "https://example.com/page", 10)
+
+        urls = {item["url"] for item in links}
+        self.assertIn("https://example.com/notice.txt", urls)
+        self.assertIn("https://example.com/guide.html", urls)
+        self.assertIn("https://example.com/archive.zip", urls)
+
     def test_attachment_parse_cache_reuses_success_and_marks_core_attachment(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workbook_path = main_module.Path(tmpdir) / "core.xlsx"
@@ -444,6 +534,99 @@ class RecordsApiTests(unittest.TestCase):
         self.assertGreaterEqual(second["retry_after_seconds"], 1)
         self.assertEqual(refreshed["cache_status"], "force_refreshed")
         self.assertTrue(refreshed["core_attachment_unavailable"])
+
+    def test_medical_service_price_pdf_is_core_attachment(self) -> None:
+        row = attachment_row(
+            articleattid="att-service-price",
+            filename="安庆市医疗保障局关于规范整合呼吸系统、神经系统等十二类医疗服务价格项目的通知.pdf",
+            fileext=".pdf",
+            filesize=123,
+        )
+
+        result = main_module._database_attachment_metadata(row, {"enable_download": False})
+
+        self.assertTrue(result["core_attachment"])
+        self.assertEqual(result["business_type"], "医疗服务价格项目")
+        self.assertTrue(result["core_attachment_unavailable"])
+
+    def test_large_pdf_extracts_limited_text_summary_instead_of_metadata_placeholder(self) -> None:
+        extracted = (
+            "安庆市医疗保障局关于规范整合呼吸系统、神经系统等十二类医疗服务价格项目的通知。"
+            "本次规范整合涉及呼吸系统、神经系统、泌尿系统等医疗服务价格项目，"
+            "明确项目内涵、计价单位、医保支付类别和执行要求。"
+        ) * 12
+
+        with patch.dict(os.environ, {"ATTACHMENT_MAX_PARSE_MB": "0.001"}, clear=False), patch.object(
+            attachment_parser_module,
+            "_parse_pdf",
+            return_value=extracted,
+        ) as parse_pdf:
+            result = parse_attachment_bytes(b"%PDF large placeholder", "安庆医疗服务价格项目.pdf", ".pdf", 39_319_671)
+
+        parse_pdf.assert_called_once()
+        self.assertIn("too_large_summary_only", result["parse_statuses"])
+        self.assertIn("parsed_summary", result["parse_statuses"])
+        self.assertGreater(result["text_length"], 800)
+        self.assertIn("医疗服务价格项目", result["summary"])
+        self.assertGreater(len(result["important_sections"]), 0)
+
+    def test_large_scanned_pdf_uses_ocr_fallback_when_text_extraction_is_empty(self) -> None:
+        ocr_text = (
+            "安庆市医疗保障局规范整合十二类医疗服务价格项目。"
+            "附件列明项目名称、项目内涵、计价单位、医保支付类别和执行要求。"
+        ) * 18
+
+        with patch.dict(os.environ, {"ATTACHMENT_MAX_PARSE_MB": "0.001"}, clear=False), patch.object(
+            attachment_parser_module,
+            "_parse_pdf",
+            return_value="",
+        ), patch.object(attachment_parser_module, "_ocr_pdf_text", return_value=(ocr_text, ["OCR completed"])):
+            result = parse_attachment_bytes(b"%PDF scanned placeholder", "安庆医疗服务价格项目.pdf", ".pdf", 39_319_671)
+
+        self.assertIn("too_large_summary_only", result["parse_statuses"])
+        self.assertIn("parsed_summary", result["parse_statuses"])
+        self.assertGreater(result["text_length"], 800)
+        self.assertIn("医保支付类别", result["summary"])
+        self.assertTrue(any("OCR completed" in warning for warning in result["warnings"]))
+
+    def test_large_pdf_without_extractable_text_is_parse_failed_not_fake_summary(self) -> None:
+        with patch.dict(os.environ, {"ATTACHMENT_MAX_PARSE_MB": "0.001"}, clear=False), patch.object(
+            attachment_parser_module,
+            "_parse_pdf",
+            return_value="",
+        ), patch.object(attachment_parser_module, "_ocr_pdf_text", return_value=("", ["OCR unavailable"])):
+            result = parse_attachment_bytes(b"%PDF scanned placeholder", "安庆医疗服务价格项目.pdf", ".pdf", 39_319_671)
+
+        self.assertIn("parse_failed", result["parse_statuses"])
+        self.assertEqual(result["text_length"], 0)
+        self.assertNotIn("parsed_summary", result["parse_statuses"])
+
+    def test_attachment_cache_key_includes_parser_version(self) -> None:
+        row = attachment_row(articleattid="att-doc-cache", filename="legacy.doc", fileext=".doc", filesize=123, uploadtime="2026")
+
+        with patch.dict(os.environ, {"ATTACHMENT_PARSER_VERSION": "old-parser"}, clear=False):
+            old_key = cache_key(row)
+        with patch.dict(os.environ, {"ATTACHMENT_PARSER_VERSION": "doc-libreoffice-parser"}, clear=False):
+            new_key = cache_key(row)
+
+        self.assertNotEqual(old_key, new_key)
+
+    def test_run_diagnostics_uses_wps_like_visible_word_count(self) -> None:
+        markdown = "# Report\n\n**\u4ef7\u683c\u89c4\u5219**: \u4f01\u4e1a impact 2026-06-16, 12.5%. <span class=\"analysis-highlight\">\u9700\u5173\u6ce8</span>"
+
+        diagnostics = build_run_diagnostics(
+            {
+                "report_markdown": markdown,
+                "quality_check": {"passed": True, "issues": []},
+                "generation_warnings": [],
+                "remaining_issues": [],
+            },
+            {"primary_materials": [], "auxiliary_materials": [], "warnings": []},
+        )
+
+        count = diagnostics["report"]["report_markdown_chars"]
+        self.assertLess(count, len(markdown))
+        self.assertEqual(count, 13)
 
     def test_analysis_prepare_downloads_attachment_by_default_without_cookie(self) -> None:
         content = "default intranet attachment content with price rule and product scope".encode("utf-8")
@@ -678,9 +861,162 @@ class RecordsApiTests(unittest.TestCase):
         self.assertIn("omitted_content", compact)
         self.assertEqual(compact["primary_materials"][0]["attachments"][0]["business_type"], "中选结果")
         self.assertNotIn("附件仅解析到元数据层面", json.dumps(compact["primary_materials"][0]["attachments"][0], ensure_ascii=False))
-        self.assertIn("资料说明", json.dumps(compact["generation_guidance"], ensure_ascii=False))
+        guidance_text = json.dumps(compact["generation_guidance"], ensure_ascii=False)
+        self.assertNotIn("资料说明", guidance_text)
+        self.assertNotIn("声  明", guidance_text)
+        self.assertIn("generation_warnings", guidance_text)
         self.assertEqual(full_response.status_code, 200)
         self.assertGreater(len(json.dumps(full_response.json(), ensure_ascii=False)), 80000)
+
+    def test_dify_compact_preserves_single_primary_material_when_under_limit(self) -> None:
+        content_text = "primary rules price enterprise execution " * 260
+        pack = {
+            "pack_id": "pack_single_primary",
+            "created_at": "2026-06-16 10:00:00",
+            "source": "database_selection",
+            "primary_materials": [
+                {
+                    "material_role": "primary",
+                    "menu_code": "m1",
+                    "articleid": "a1",
+                    "title": "Single primary material",
+                    "content_text": content_text,
+                    "content_text_length": len(content_text),
+                    "content_summary": "primary summary",
+                    "key_facts": [{"name": "execution date", "value": "2026-06-01"}],
+                    "important_passages": [{"reason": "price rule", "text": "Products use selected prices."}],
+                    "attachments": [
+                        {
+                            "articleattid": "att1",
+                            "filename": "selected-result.xlsx",
+                            "core_attachment": True,
+                            "business_type": "中选结果",
+                            "parse_status": "parsed_table_summary",
+                            "summary": "Attachment contains enterprise, product and selected price fields.",
+                            "key_facts": ["enterprise/product/selected price columns exist"],
+                            "table_summaries": [
+                                {
+                                    "sheet_name": "result",
+                                    "rows": 120,
+                                    "columns_count": 8,
+                                    "headers": ["enterprise", "product", "selected_price"],
+                                    "key_columns": ["enterprise", "product", "selected_price"],
+                                    "summary": "Selected result table contains enterprise, product and price fields.",
+                                    "business_value": "Supports selected result and price analysis.",
+                                }
+                            ],
+                        }
+                    ],
+                    "warnings": [],
+                }
+            ],
+            "auxiliary_materials": [],
+            "combined_key_facts": [],
+            "report_focus": ["Single primary material"],
+            "warnings": [],
+            "generation_guidance": {},
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+        primary = compact["primary_materials"][0]
+
+        self.assertEqual(primary["content_text"], content_text)
+        self.assertGreater(len(primary["content_text"]), 8000)
+        self.assertNotIn("primary_content_tail", {item["type"] for item in compact["omitted_content"]})
+        self.assertLess(compact["compact_pack_chars"], 65000)
+
+    def test_pack_diagnostics_marks_short_body_with_rich_core_attachment_as_attachment_led(self) -> None:
+        pack = {
+            "pack_id": "pack_attachment_led",
+            "primary_materials": [
+                {
+                    "menu_code": "m1",
+                    "articleid": "a1",
+                    "title": "安徽医疗服务价格项目通知",
+                    "content_text": "正文较短",
+                    "content_text_length": 4,
+                    "attachments": [
+                        {
+                            "articleattid": "att1",
+                            "filename": "十二类医疗服务价格项目目录.xlsx",
+                            "core_attachment": True,
+                            "parse_status": "parsed_table_summary",
+                            "summary": "附件列明呼吸系统、神经系统等十二类医疗服务价格项目、医保支付类别、项目内涵和计价单位。" * 20,
+                            "key_facts": ["附件是本通知的核心依据，正文主要承担发布说明作用。"],
+                            "table_summaries": [
+                                {
+                                    "sheet_name": "价格项目目录",
+                                    "rows": 1500,
+                                    "columns_count": 12,
+                                    "headers": ["项目编码", "项目名称", "项目内涵", "计价单位", "医保支付类别"],
+                                    "key_columns": ["项目名称", "项目内涵", "医保支付类别"],
+                                    "summary": "该表为十二类医疗服务价格项目目录，覆盖项目编码、名称、内涵、计价单位和医保支付类别。" * 20,
+                                    "business_value": "可作为报告梳理价格项目整合范围和医保支付政策的核心依据。" * 10,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+        }
+
+        diagnostics = build_pack_diagnostics(pack, main_module._compact_evidence_pack_for_dify(pack))
+        codes = {item["code"] for item in diagnostics["diagnosis"]}
+
+        self.assertIn("ATTACHMENT_LED_PRIMARY_MATERIAL", codes)
+        self.assertNotIn("EVIDENCE_PRIMARY_TOO_SHORT", codes)
+        self.assertTrue(diagnostics["primary_materials"][0]["attachment_led"])
+        self.assertGreater(diagnostics["primary_materials"][0]["primary_attachment_evidence_chars"], 800)
+
+    def test_dify_compact_limits_auxiliary_attachment_bulk(self) -> None:
+        attachments = []
+        for index in range(14):
+            attachments.append(
+                {
+                    "articleattid": f"att-{index}",
+                    "filename": f"{index}.price-table.doc",
+                    "fileext": ".doc",
+                    "parse_status": "parsed_summary",
+                    "download_status": "stream_parsed",
+                    "summary": "auxiliary attachment summary " * 300,
+                    "table_summaries": [
+                        {
+                            "sheet_name": "Sheet1",
+                            "rows": 200,
+                            "columns_count": 10,
+                            "headers": ["code", "item", "price", "insurance"],
+                            "key_columns": ["price", "insurance"],
+                            "summary": "table summary " * 100,
+                            "business_value": "background only",
+                        }
+                    ],
+                }
+            )
+        pack = {
+            "pack_id": "pack_aux_bulk",
+            "primary_materials": [{"menu_code": "m", "articleid": "p", "title": "Primary", "content_text": "primary body " * 500}],
+            "auxiliary_materials": [
+                {
+                    "menu_code": "m",
+                    "articleid": "a",
+                    "title": "Auxiliary",
+                    "content_text": "auxiliary body " * 800,
+                    "content_summary": "auxiliary summary",
+                    "attachments": attachments,
+                    "attachment_summaries": attachments,
+                }
+            ],
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+        auxiliary = compact["auxiliary_materials"][0]
+
+        self.assertLessEqual(len(auxiliary["attachments"]), 5)
+        self.assertTrue(all(len(item["summary"]) <= 520 for item in auxiliary["attachments"]))
+        self.assertLess(compact["compact_pack_chars"], 65000)
+        omitted_types = {item["type"] for item in compact["omitted_content"]}
+        self.assertIn("auxiliary_attachment_overflow", omitted_types)
 
     def test_pack_diagnostics_reports_evidence_level_and_attachment_status(self) -> None:
         pack = {
@@ -794,6 +1130,73 @@ class RecordsApiTests(unittest.TestCase):
         self.assertIn("dify_compact_pack_chars", evidence)
         self.assertIn("primary_attachment_summary_chars", evidence)
 
+    def test_run_diagnostics_reports_missing_material_coverage_items(self) -> None:
+        pack = {
+            "pack_id": "pack_coverage",
+            "primary_materials": [
+                {
+                    "menu_code": "m1",
+                    "articleid": "a1",
+                    "title": "Coverage notice",
+                    "audittime": "2026-06-01",
+                    "areaname": "云南省",
+                    "publicorg": "医保局",
+                    "content_text": (
+                        "执行时间为2026年6月1日。产品范围包括药物球囊和泌尿介入类耗材。"
+                        "价格规则为按中选价格挂网。企业需要维护产品信息。医疗机构按中选结果采购。"
+                        "未按要求维护可能暂停挂网。"
+                    ),
+                    "content_text_length": 83,
+                    "key_facts": [{"name": "执行时间", "value": "2026年6月1日"}],
+                    "important_passages": [{"reason": "执行", "text": "医疗机构按中选结果采购。"}],
+                    "price_rules": ["价格规则为按中选价格挂网。"],
+                    "time_requirements": ["执行时间为2026年6月1日。"],
+                    "product_scope": ["产品范围包括药物球囊和泌尿介入类耗材。"],
+                    "enterprise_requirements": ["企业需要维护产品信息。"],
+                    "execution_requirements": ["医疗机构按中选结果采购。"],
+                    "attachments": [
+                        {
+                            "articleattid": "att1",
+                            "filename": "中选结果表.xlsx",
+                            "core_attachment": True,
+                            "parse_status": "parsed_table_summary",
+                            "summary": "附件包含企业、产品和中选价字段。",
+                            "table_summaries": [
+                                {
+                                    "sheet_name": "中选结果",
+                                    "headers": ["企业名称", "产品名称", "中选价"],
+                                    "key_columns": ["企业名称", "产品名称", "中选价"],
+                                    "summary": "中选结果表包含企业、产品和中选价。",
+                                    "business_value": "可用于价格和产品范围分析。",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+            "warnings": [],
+        }
+        record = {
+            "report_title": "Coverage report",
+            "report_markdown": "本报告仅说明执行时间为2026年6月1日。",
+            "quality_check": {"passed": True, "issues": []},
+            "generation_warnings": [],
+            "remaining_issues": [],
+            "version": 1,
+        }
+
+        diagnostics = build_run_diagnostics(record, pack, main_module._compact_evidence_pack_for_dify(pack))
+
+        coverage = diagnostics["coverage"]
+        self.assertLess(coverage["coverage_score"], 80)
+        self.assertTrue(coverage["is_report_too_short_by_coverage"])
+        missing_labels = {item["label"] for item in coverage["missing_items"]}
+        self.assertIn("价格规则", missing_labels)
+        self.assertIn("产品范围", missing_labels)
+        self.assertIn("附件表格摘要", missing_labels)
+        self.assertIn("REPORT_MISSING_CORE_COVERAGE", {item["code"] for item in diagnostics["diagnosis"]})
+
     def test_analysis_run_progress_is_smooth_while_running(self) -> None:
         with patch("app.diagnostics.datetime") as datetime_mock:
             datetime_mock.fromisoformat.side_effect = main_module.datetime.fromisoformat
@@ -839,8 +1242,50 @@ class RecordsApiTests(unittest.TestCase):
         self.assertIsNone(by_key["revision"]["timestamp"])
         self.assertEqual(by_key["final_output"]["timestamp"], "2026-06-12 10:02:00")
 
+    def test_dify_timeout_error_is_actionable_for_large_pack(self) -> None:
+        record = {
+            "success": True,
+            "run_id": "run_timeout123",
+            "pack_id": "pack_timeout",
+            "status": "running",
+            "workflow_run_id": "",
+            "report_title": "",
+            "report_markdown": "",
+            "quality_check": {"passed": None, "issues": []},
+            "created_at": "2026-06-16 10:00:00",
+            "updated_at": "2026-06-16 10:00:00",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            main_module, "_analysis_run_dir", return_value=main_module.Path(tmpdir), create=True
+        ), patch.object(
+            main_module,
+            "_call_dify_workflow",
+            side_effect=main_module.DifyWorkflowError("DIFY_TIMEOUT", "Dify 工作流调用超时", "timed out", status_code=504),
+            create=True,
+        ):
+            main_module._write_analysis_run(record)
+            main_module._execute_analysis_run_background("pack_timeout", "run_timeout123")
+            saved = main_module._read_analysis_run("run_timeout123")
+
+        self.assertEqual(saved["status"], "failed")
+        self.assertIn("证据包较大", saved["error_message"])
+        self.assertIn("减少辅助材料", " ".join(saved["warnings"]))
+
     def test_analysis_run_calls_dify_and_persists_report(self) -> None:
         calls: list[tuple[str, str]] = []
+        report_markdown = "\n\n".join(
+            [
+                "# Report title",
+                "## 导语",
+                "This report is a complete mocked report used to verify that a normal Dify response is persisted without fallback repair.",
+                "## 一、Core Findings",
+                "The selected material contains enough structured content for a normal report body. "
+                "This paragraph intentionally has enough length and report structure so the fragment guard does not treat it as a partial revision output.",
+                "## 二、Analysis",
+                "The generated report includes a stable title, multiple sections, and a readable body. "
+                "It should remain finished because this test is checking persistence of a valid workflow response.",
+            ]
+        )
 
         def fake_call(pack_id: str, run_id: str):
             calls.append((pack_id, run_id))
@@ -848,7 +1293,7 @@ class RecordsApiTests(unittest.TestCase):
                 "workflow_run_id": "wf-run-1",
                 "status": "finished",
                 "report_title": "Report title",
-                "report_markdown": "# Report\n\nBody",
+                "report_markdown": report_markdown,
                 "version": 1,
                 "quality_check": {"passed": True, "issues": []},
                 "generation_warnings": ["metadata only"],
@@ -880,7 +1325,7 @@ class RecordsApiTests(unittest.TestCase):
             report_response = self.client.get(f"/analysis/runs/{body['run_id']}/report")
             self.assertEqual(report_response.status_code, 200)
             report_body = report_response.json()
-            self.assertEqual(report_body["report_markdown"], "# Report\n\nBody")
+            self.assertEqual(report_body["report_markdown"], report_markdown)
             self.assertTrue(report_body["quality_check"]["passed"])
 
     def test_analysis_run_download_exports_markdown_docx(self) -> None:
@@ -964,6 +1409,112 @@ class RecordsApiTests(unittest.TestCase):
         self.assertIn("这是分析内容。", text)
         self.assertNotIn("analysis-highlight", text)
         self.assertNotIn("<span", text)
+
+    def test_clean_model_output_removes_model_generated_material_note_and_declaration(self) -> None:
+        markdown = "\n".join(
+            [
+                "# 测试报告",
+                "",
+                "正文第一段。",
+                "",
+                "## 资料说明",
+                "",
+                "本报告基于当前已解析的公告正文、附件摘要及结构化信息生成。",
+                "",
+                "## 声  明",
+                "",
+                "本报告仅供参考。",
+            ]
+        )
+
+        cleaned = main_module._clean_model_output(markdown)
+
+        self.assertIn("正文第一段。", cleaned)
+        self.assertNotIn("资料说明", cleaned)
+        self.assertNotIn("声  明", cleaned)
+
+    def test_clean_model_output_removes_technical_attachment_parse_notes(self) -> None:
+        markdown = "\n".join(
+            [
+                "# 安庆市医疗服务价格项目分析报告",
+                "",
+                "## 一、政策背景",
+                "",
+                "本次通知规范整合多类医疗服务价格项目，医疗机构需按新规则执行。",
+                "",
+                "> 注：数字来源于附件OCR识别，可能存在误差。",
+                "",
+                "| 支付类别 | 数量 | 说明 |",
+                "| --- | --- | --- |",
+                "| 乙类 | 数量待确认（OCR识别错误） | 以正式文件为准 |",
+                "",
+                "附件PDF因文件过大未解析，未能提取具体细则。",
+                "该段是正常分析，应当保留。",
+                "",
+                "资料说明：附件仅解析到元数据层面。",
+            ]
+        )
+
+        cleaned = main_module._clean_model_output(markdown)
+
+        self.assertIn("本次通知规范整合多类医疗服务价格项目", cleaned)
+        self.assertIn("该段是正常分析", cleaned)
+        self.assertNotIn("OCR", cleaned)
+        self.assertNotIn("附件PDF因", cleaned)
+        self.assertNotIn("元数据", cleaned)
+        self.assertNotIn("未解析", cleaned)
+        self.assertNotIn("资料说明", cleaned)
+
+    def test_clean_model_output_keeps_analysis_when_technical_note_is_same_line(self) -> None:
+        markdown = "\n".join(
+            [
+                "# \u5b89\u5e86\u5e02\u533b\u7597\u670d\u52a1\u4ef7\u683c\u9879\u76ee\u5206\u6790\u62a5\u544a",
+                "",
+                "\u5b89\u5e86\u5e02\u5bf9\u5341\u4e8c\u7c7b\u533b\u7597\u670d\u52a1\u4ef7\u683c\u9879\u76ee\u8fdb\u884c\u89c4\u8303\u6574\u5408\uff0c\u533b\u7597\u673a\u6784\u9700\u6309\u65b0\u89c4\u5219\u66f4\u65b0\u6536\u8d39\u9879\u76ee\u3002\u6570\u5b57\u6765\u6e90\u4e8e\u9644\u4ef6OCR\u8bc6\u522b\uff0c\u53ef\u80fd\u5b58\u5728\u8bef\u5dee\u3002\u4f01\u4e1a\u5e94\u5173\u6ce8\u9879\u76ee\u5185\u6db5\u3001\u652f\u4ed8\u7c7b\u522b\u4e0e\u914d\u5957\u8017\u6750\u4f7f\u7528\u573a\u666f\u7684\u53d8\u5316\u3002",
+            ]
+        )
+
+        cleaned = main_module._clean_model_output(markdown)
+
+        self.assertIn("\u89c4\u8303\u6574\u5408", cleaned)
+        self.assertIn("\u4f01\u4e1a\u5e94\u5173\u6ce8", cleaned)
+        self.assertNotIn("OCR", cleaned)
+        self.assertNotIn("\u8bef\u5dee", cleaned)
+
+    def test_clean_model_output_removes_recognition_error_notes_in_tables(self) -> None:
+        markdown = "\n".join(
+            [
+                "| 支付类别 | 项目数量 | 说明 |",
+                "| --- | --- | --- |",
+                "| 乙类 | 825项 | 个人先自付一定比例再报销。（注：原文此处存在识别错误，实际数量以正式文件为准。） |",
+                "",
+                "上述分类直接影响患者的自付水平和医院的收入结构。",
+            ]
+        )
+
+        cleaned = main_module._clean_model_output(markdown)
+
+        self.assertIn("乙类", cleaned)
+        self.assertIn("上述分类直接影响", cleaned)
+        self.assertNotIn("识别错误", cleaned)
+        self.assertNotIn("正式文件为准", cleaned)
+
+    def test_clean_model_output_removes_source_recognition_problem_notes(self) -> None:
+        markdown = "\n".join(
+            [
+                "通知明确，将“颅内动脉瘤夹闭成形费”（注：原文为“来闭成形费”，根据医学常识修正）等项目纳入医保支付范围。",
+                "部分项目按乙类管理（具体数量因原文识别问题暂无法确认），项目所标注价格为医保基金最高支付标准。",
+                "医疗机构需完成价格库更新和收费流程调整。",
+            ]
+        )
+
+        cleaned = main_module._clean_model_output(markdown)
+
+        self.assertIn("通知明确", cleaned)
+        self.assertIn("医疗机构需完成", cleaned)
+        self.assertNotIn("根据医学常识", cleaned)
+        self.assertNotIn("识别问题", cleaned)
+        self.assertNotIn("暂无法确认", cleaned)
 
     def test_analysis_run_download_rejects_not_ready_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1052,9 +1603,90 @@ class RecordsApiTests(unittest.TestCase):
         self.assertEqual(repaired["status"], "needs_manual_review")
         self.assertGreater(len(repaired["report_markdown"]), 300)
         self.assertIn("天津市医保局", repaired["report_title"])
-        self.assertIn("后端兜底版本", repaired["report_markdown"])
+        self.assertNotIn("后端兜底版本", repaired["report_markdown"])
+        self.assertTrue(repaired["warnings"])
         self.assertFalse(repaired["quality_check"]["passed"])
-        self.assertEqual(repaired["remaining_issues"][0]["issue_id"], "Q_DIFY_EMPTY_REPORT")
+        self.assertEqual(repaired["remaining_issues"][0]["issue_id"], "Q_DIFY_FRAGMENTARY_REPORT")
+
+    def test_fragmentary_dify_revision_gets_fallback_from_attachment_rich_pack(self) -> None:
+        pack = {
+            "primary_materials": [
+                {
+                    "title": "\u5b89\u5e86\u5e02\u89c4\u8303\u6574\u5408\u5341\u4e8c\u7c7b\u533b\u7597\u670d\u52a1\u4ef7\u683c\u9879\u76ee\u7684\u901a\u77e5",
+                    "content_text": "\u8be6\u60c5\u8bf7\u89c1\u9644\u4ef6\u3002",
+                    "attachments": [
+                        {
+                            "filename": "\u5b89\u5e86\u5e02\u5341\u4e8c\u7c7b\u533b\u7597\u670d\u52a1\u4ef7\u683c\u9879\u76ee.pdf",
+                            "core_attachment": True,
+                            "summary": "\u9644\u4ef6\u660e\u786e\u89c4\u8303\u6574\u5408\u547c\u5438\u7cfb\u7edf\u3001\u795e\u7ecf\u7cfb\u7edf\u7b49\u5341\u4e8c\u7c7b\u533b\u7597\u670d\u52a1\u4ef7\u683c\u9879\u76ee\uff0c\u81ea2026\u5e746\u67081\u65e5\u8d77\u6267\u884c\u3002"
+                            "\u5176\u4e2d\u90e8\u5206\u9879\u76ee\u5b9e\u884c\u6700\u9ad8\u653f\u5e9c\u6307\u5bfc\u4ef7\uff0c\u90e8\u5206\u9879\u76ee\u5b9e\u884c\u5e02\u573a\u8c03\u8282\u4ef7\uff0c\u5e76\u533a\u5206\u7532\u7c7b\u3001\u4e59\u7c7b\u548c\u4e0d\u4e88\u652f\u4ed8\u9879\u76ee\u3002",
+                            "key_facts": [
+                                "\u6267\u884c\u65f6\u95f4\u4e3a2026\u5e746\u67081\u65e5\u3002",
+                                "\u516c\u7acb\u533b\u7597\u673a\u6784\u9700\u5b8c\u6210\u4ef7\u683c\u516c\u793a\u548c\u6536\u8d39\u7cfb\u7edf\u66f4\u65b0\u3002",
+                                "\u5e02\u573a\u8c03\u8282\u4ef7\u9879\u76ee\u9700\u5411\u533b\u4fdd\u90e8\u95e8\u5907\u6848\u3002",
+                            ],
+                            "important_sections": [
+                                {"title": "\u4ef7\u683c\u7ba1\u7406", "summary": "\u9879\u76ee\u6309\u6700\u9ad8\u653f\u5e9c\u6307\u5bfc\u4ef7\u548c\u5e02\u573a\u8c03\u8282\u4ef7\u5206\u7c7b\u7ba1\u7406\u3002"},
+                                {"title": "\u533b\u4fdd\u652f\u4ed8", "summary": "\u7532\u7c7b\u3001\u4e59\u7c7b\u548c\u4e0d\u4e88\u652f\u4ed8\u9879\u76ee\u9002\u7528\u4e0d\u540c\u533b\u4fdd\u652f\u4ed8\u89c4\u5219\u3002"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+        }
+        result = {
+            "status": "needs_manual_review",
+            "report_title": "\u5b89\u5e86\u5e02\u533b\u7597\u670d\u52a1\u4ef7\u683c\u9879\u76ee\u5206\u6790",
+            "report_markdown": "| \u652f\u4ed8\u7c7b\u522b | \u9879\u76ee\u6570\u91cf |\n| --- | --- |\n| \u7532\u7c7b | 456 |",
+            "quality_check": {"passed": False, "issues": []},
+            "generation_warnings": [],
+            "warnings": [],
+        }
+
+        repaired = main_module._repair_unusable_dify_result(result, pack)
+
+        self.assertEqual(repaired["status"], "needs_manual_review")
+        self.assertIn("\u9644\u4ef6\u8981\u70b9\u8865\u5145", repaired["report_markdown"])
+        self.assertIn("\u6267\u884c\u65f6\u95f4\u4e3a2026\u5e746\u67081\u65e5", repaired["report_markdown"])
+        self.assertGreater(len(repaired["report_markdown"]), 500)
+        self.assertNotIn("evidence_pack", repaired["report_markdown"])
+        self.assertNotIn("Dify", repaired["report_markdown"])
+        self.assertNotIn("\u5143\u6570\u636e", repaired["report_markdown"])
+
+    def test_report_starting_from_second_section_is_treated_as_fragment(self) -> None:
+        pack = {
+            "primary_materials": [
+                {
+                    "title": "安庆市规范整合十二类医疗服务价格项目的通知",
+                    "content_text": "详情请见附件。",
+                    "attachments": [
+                        {
+                            "filename": "价格项目.pdf",
+                            "core_attachment": True,
+                            "summary": "附件说明十二类医疗服务价格项目自2026年6月1日起执行，涉及政府指导价、市场调节价和医保支付分类。",
+                            "key_facts": ["执行时间为2026年6月1日。"],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+        }
+        result = {
+            "status": "needs_manual_review",
+            "report_title": "安庆市医疗服务价格项目分析",
+            "report_markdown": "### 二、价格管理规则\n\n通知明确了政府指导价和市场调节价两类机制。\n\n### 三、医保支付范围\n\n医保支付分类影响患者自付比例。",
+            "quality_check": {"passed": False, "issues": []},
+            "generation_warnings": [],
+            "warnings": [],
+        }
+
+        repaired = main_module._repair_unusable_dify_result(result, pack)
+
+        self.assertEqual(repaired["status"], "needs_manual_review")
+        self.assertIn("## 导语", repaired["report_markdown"])
+        self.assertIn("附件要点补充", repaired["report_markdown"])
+        self.assertGreater(len(repaired["report_markdown"]), len(result["report_markdown"]))
 
     def test_user_feedback_revision_updates_latest_report_and_keeps_previous_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1103,6 +1735,15 @@ class RecordsApiTests(unittest.TestCase):
         self.assertEqual(report_response.json()["version"], 2)
         self.assertEqual(record["report_versions"][0]["version"], 1)
         self.assertEqual(record["revisions"][0]["feedback"], "增加企业影响分析")
+
+    def test_records_ui_defaults_to_cached_prepare_and_has_reparse_button(self) -> None:
+        html = (main_module.Path(main_module.__file__).resolve().parent / "static" / "records.html").read_text(encoding="utf-8")
+
+        self.assertIn("force_refresh_attachments", html)
+        self.assertIn("reparseAttachmentsBtn", html)
+        self.assertIn("\u91cd\u65b0\u89e3\u6790\u9644\u4ef6\u5e76\u751f\u6210\u8bc1\u636e\u5305", html)
+        self.assertIn(".doc", html)
+        self.assertNotIn("force_refresh_attachments: true,\n      };", html)
 
     def test_analysis_run_rejects_missing_pack(self) -> None:
         with patch.object(

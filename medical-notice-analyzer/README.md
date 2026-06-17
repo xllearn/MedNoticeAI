@@ -70,7 +70,7 @@ Set real secrets only in `.env` or exported environment variables. Do not hardco
 
 ## Database Record Selection
 
-Phase 1 adds an internal article browser and material selection page. Phase 2 prepares a database-backed `evidence_pack` from selected primary and auxiliary materials. These steps do not call Dify, generate reports, download attachments, or parse attachment content.
+Phase 1 adds an internal article browser and material selection page. Phase 2 prepares a database-backed `evidence_pack` from selected primary and auxiliary materials. The current Stage 4 flow downloads and parses database attachments by default when the backend is inside the company network, stores only parsed-summary JSON, and never keeps original attachment files long term.
 
 Open the page after the service starts:
 
@@ -105,7 +105,11 @@ EVIDENCE_PACK_DIR=/app/data/evidence_packs
 ANALYSIS_RUN_DIR=/app/data/analysis_runs
 ```
 
-Do not put database credentials in source files or Dify workflow YAML. The list endpoint reads from `sample_article_wide` with `status = 0`, counts attachments from `sample_article_attach`, and does not return full `content`. The prepare endpoint reads selected records, cleans article HTML into `content_text`, records attachment metadata only, saves JSON packs under `EVIDENCE_PACK_DIR`, and returns a `pack_id`.
+Do not put database credentials in source files or Dify workflow YAML. The list endpoint reads from `sample_article_wide` with `status = 0`, counts attachments from `sample_article_attach`, and does not return full `content`. The prepare endpoint reads selected records, cleans article HTML into `content_text`, downloads and parses attachment summaries when enabled, saves full JSON packs under `EVIDENCE_PACK_DIR`, and returns a `pack_id`.
+
+Attachment parsing currently supports PDF, DOC, DOCX, XLSX, XLSM, XLS, CSV, TXT, HTML/HTM, and ZIP. Legacy `.doc` files are converted to DOCX with LibreOffice in a temporary directory, then parsed through the DOCX parser. If conversion fails, the attachment is marked as `parse_failed` and report generation continues with warnings.
+
+Dify should call `GET /analysis/packs/{pack_id}`. This returns a compact `evidence_pack_for_dify` designed to stay below Dify variable-size limits. Use `GET /analysis/packs/{pack_id}?full=true` only for backend diagnostics or debugging because it returns the full saved `evidence_pack`.
 
 Phase 3 adds a backend-only Dify proxy for report generation. The frontend calls `POST /analysis/run` with a `pack_id`; the backend calls the Dify Workflow API in blocking mode, saves the run result under `ANALYSIS_RUN_DIR`, and the frontend reads the report from `/analysis/runs/{run_id}/report`. The frontend never receives the Dify API key.
 

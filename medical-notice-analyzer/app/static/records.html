@@ -901,7 +901,8 @@
         </div>
         <div class="selection-footer">
           <button class="primary" id="confirmBtn" type="button">确认选材</button>
-          <span class="muted">确认后生成 evidence_pack，暂不调用 Dify</span>
+          <button class="secondary" id="reparseAttachmentsBtn" type="button">重新解析附件并生成证据包</button>
+          <span class="muted">确认选材默认复用附件解析缓存；只有重新解析按钮会刷新 .doc、Excel、PDF 等附件解析结果。</span>
           <div class="preview-box" id="previewResult"></div>
         </div>
       </aside>
@@ -941,6 +942,7 @@
       auxiliary: [],
       detailRecord: null,
       lastPrepareResult: null,
+      lastForceRefresh: false,
       lastRunResult: null,
       toastTimer: null,
     };
@@ -1302,9 +1304,10 @@
       $('detailAuxBtn').textContent = selected === 'auxiliary' ? '已为辅助材料' : '设为辅助材料';
     }
 
-    function renderPrepareResult(data) {
+    function renderPrepareResult(data, forceRefresh = false) {
       const warnings = data.warnings || [];
       state.lastPrepareResult = data;
+      state.lastForceRefresh = Boolean(forceRefresh);
       $('previewResult').classList.add('show');
       $('previewResult').innerHTML = `
         <div class="pack-result">
@@ -1323,6 +1326,7 @@
             <span class="muted">Warnings</span>
             ${warnings.length ? `<ul class="warnings-list">${warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<div class="muted">无</div>'}
           </div>
+          <div class="muted">${forceRefresh ? '本次已重新下载并解析附件，新的解析摘要已写入证据包。' : '本次优先使用附件解析缓存，生成速度更快；如需刷新附件内容，可点击“重新解析附件并生成证据包”。'} .doc 附件会先临时转换为 DOCX 后提取摘要和表格。</div>
           <div class="pack-actions">
             <button class="secondary small" type="button" data-action="copy-pack-id">复制 pack_id</button>
             <button class="secondary small" type="button" data-action="view-pack-summary">查看证据包摘要</button>
@@ -1516,7 +1520,7 @@
       }
     }
 
-    async function confirmSelection() {
+    async function confirmSelection(forceRefresh = false) {
       if (state.primary.length < 1) {
         showToast('请至少选择 1 条主分析材料。', 'warning');
         return;
@@ -1525,10 +1529,14 @@
       const payload = {
         primary_materials: state.primary.map(({ menu_code, articleid }) => ({ menu_code, articleid })),
         auxiliary_materials: state.auxiliary.map(({ menu_code, articleid }) => ({ menu_code, articleid })),
+        force_refresh_attachments: Boolean(forceRefresh),
       };
 
       $('confirmBtn').disabled = true;
-      $('confirmBtn').textContent = '生成中...';
+      $('reparseAttachmentsBtn').disabled = true;
+      const targetButton = forceRefresh ? $('reparseAttachmentsBtn') : $('confirmBtn');
+      const originalText = targetButton.textContent;
+      targetButton.textContent = forceRefresh ? '重新解析中...' : '生成中...';
       try {
         const response = await fetch('/analysis/prepare', {
           method: 'POST',
@@ -1537,13 +1545,14 @@
         });
         if (!response.ok) throw new Error(await readError(response));
         const data = await response.json();
-        renderPrepareResult(data);
+        renderPrepareResult(data, forceRefresh);
         showToast('证据包已生成，已返回 pack_id。', 'success');
       } catch (error) {
         showToast(`证据包生成失败：${error.message}`, 'error');
       } finally {
         $('confirmBtn').disabled = false;
-        $('confirmBtn').textContent = '确认选材';
+        $('reparseAttachmentsBtn').disabled = false;
+        targetButton.textContent = originalText;
       }
     }
 
@@ -1598,7 +1607,8 @@
       removeMaterial(button.dataset.type, button.dataset.key);
     }
 
-    $('confirmBtn').addEventListener('click', confirmSelection);
+    $('confirmBtn').addEventListener('click', () => confirmSelection(false));
+    $('reparseAttachmentsBtn').addEventListener('click', () => confirmSelection(true));
     $('previewResult').addEventListener('click', (event) => {
       const button = event.target.closest('button');
       if (!button) return;

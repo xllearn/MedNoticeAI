@@ -18,6 +18,7 @@ SUCCESS_STATUSES = {
     "unsupported",
 }
 FAILURE_STATUSES = {"download_failed", "network_unreachable", "parse_failed", "temp_file_cleanup_failed"}
+PARSER_CACHE_VERSION = "20260616-doc-libreoffice-v2"
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -44,6 +45,7 @@ def cache_dir() -> Path:
 
 def cache_key(attachment: dict[str, Any]) -> str:
     payload = {
+        "parser_version": (os.getenv("ATTACHMENT_PARSER_VERSION") or PARSER_CACHE_VERSION).strip(),
         "articleattid": str(attachment.get("articleattid") or ""),
         "filename": str(attachment.get("filename") or ""),
         "filesize": str(attachment.get("filesize") or ""),

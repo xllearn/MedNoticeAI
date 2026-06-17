@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -22,6 +23,30 @@ def _text(value: Any) -> str:
 
 def _safe_len(value: Any) -> int:
     return len(_text(value).strip())
+
+
+def _wps_like_word_count(value: Any) -> int:
+    """Approximate WPS/Word visible word count for rendered report text.
+
+    Markdown source length over-counts headings, emphasis markers, HTML spans,
+    punctuation, and whitespace. WPS-style counting is closer to counting CJK
+    characters plus Latin/number words in the rendered document.
+    """
+    text = _text(value)
+    if not text.strip():
+        return 0
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"^[#>\-\*\+\s]+", "", text, flags=re.M)
+    text = text.replace("|", " ")
+    text = re.sub(r"[*_~]+", "", text)
+    cjk_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", text))
+    non_cjk = re.sub(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", " ", text)
+    word_count = len(re.findall(r"[A-Za-z0-9]+(?:[./:_-][A-Za-z0-9]+)*", non_cjk))
+    return cjk_count + word_count
 
 
 def _any_text_len(value: Any) -> int:
@@ -243,6 +268,7 @@ def _json_chars(value: Any) -> int:
 
 def _material_brief(material: dict[str, Any], role: str) -> dict[str, Any]:
     attachments = [item for item in material.get("attachments") or [] if isinstance(item, dict)]
+    attachment_summary_chars, attachment_table_summary_chars = _attachment_text_chars([material])
     brief = {
         "menu_code": material.get("menu_code") or "",
         "articleid": material.get("articleid") or "",
@@ -250,14 +276,33 @@ def _material_brief(material: dict[str, Any], role: str) -> dict[str, Any]:
         "content_text_length": _material_content_length(material),
         "summary_length": _summary_length(material),
         "attachment_count": len(attachments),
+        "attachment_summary_chars": attachment_summary_chars,
+        "attachment_table_summary_chars": attachment_table_summary_chars,
         "auth_required_count": sum(1 for item in attachments if item.get("parse_status") in {"auth_required", "auth_failed"}),
         "parse_failed_count": sum(1 for item in attachments if item.get("parse_status") in {"download_failed", "unsupported", "parse_failed"}),
     }
     if role == "primary":
         brief["key_fact_count"] = len(material.get("key_facts") or [])
+        brief["primary_attachment_evidence_chars"] = attachment_summary_chars + attachment_table_summary_chars
+        brief["attachment_led"] = _is_attachment_led_primary(material)
     else:
         brief["usable_point_count"] = len(material.get("usable_points") or [])
     return brief
+
+
+def _is_attachment_led_primary(material: dict[str, Any]) -> bool:
+    if _material_content_length(material) >= 800:
+        return False
+    has_usable_core_attachment = any(
+        isinstance(attachment, dict)
+        and bool(attachment.get("core_attachment"))
+        and _attachment_is_usable(attachment)
+        for attachment in material.get("attachments") or []
+    )
+    if not has_usable_core_attachment:
+        return False
+    summary_chars, table_chars = _attachment_text_chars([material])
+    return summary_chars + table_chars >= 800
 
 
 def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -314,9 +359,21 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
     parsed_count = attachment_counts["parsed_attachment_count"]
     attachment_count = attachment_counts["attachment_count"]
     unparsed_count = attachment_count - parsed_count
+    attachment_led_primary_count = sum(1 for item in primary if _is_attachment_led_primary(item))
+    short_primary_without_attachment_evidence = [
+        item for item in primary if _material_content_length(item) < 800 and not _is_attachment_led_primary(item)
+    ]
 
     diagnosis: list[dict[str, str]] = []
-    if primary_content_chars < 800:
+    if attachment_led_primary_count:
+        diagnosis.append(
+            _diagnosis(
+                "ATTACHMENT_LED_PRIMARY_MATERIAL",
+                "normal",
+                "存在主材料正文较短但核心附件已解析的材料，报告应以附件摘要和表格结构作为主体依据。",
+            )
+        )
+    if short_primary_without_attachment_evidence:
         diagnosis.append(
             _diagnosis(
                 "EVIDENCE_PRIMARY_TOO_SHORT",
@@ -411,6 +468,7 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
         "total_content_chars": raw_total_content_chars,
         "primary_materials": [_material_brief(item, "primary") for item in primary],
         "auxiliary_materials": [_material_brief(item, "auxiliary") for item in auxiliary],
+        "attachment_led_primary_count": attachment_led_primary_count,
         **attachment_counts,
         "core_attachment_unparsed_names": core_unparsed_names,
         "attachment_analysis_impact": bool(core_unparsed_names),
@@ -510,16 +568,233 @@ def _version_items(record: dict[str, Any], final_chars: int) -> list[dict[str, A
     return [{"version": version, "type": "final_output" if version > 1 else "initial_generation", "chars": final_chars}]
 
 
+def _flatten_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        return " ".join(_flatten_text(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(_flatten_text(item) for item in value)
+    return str(value)
+
+
+def _normalize_for_match(value: Any) -> str:
+    text = _flatten_text(value)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\s+", "", text)
+    text = text.replace("-", "").replace("/", "").replace(".", "")
+    return text.lower()
+
+
+def _coverage_terms(value: Any) -> list[str]:
+    text = _flatten_text(value)
+    terms: list[str] = []
+    terms.extend(re.findall(r"\d{4}年\d{1,2}月\d{1,2}日|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d+(?:\.\d+)?%?", text))
+    for chunk in re.split(r"[，。；;：:\s、（）()【】\[\]<>《》]|包括|涉及|包含|为|按|和|及|以及|或|等", text):
+        chunk = chunk.strip()
+        if 2 <= len(chunk) <= 18:
+            terms.append(chunk)
+    for keyword in [
+        "价格",
+        "中选价",
+        "申报价",
+        "产品",
+        "企业",
+        "挂网",
+        "采购",
+        "执行",
+        "配送",
+        "医疗机构",
+        "暂停",
+        "撤销",
+        "信用",
+        "注册证",
+        "医保编码",
+    ]:
+        if keyword in text:
+            terms.append(keyword)
+    seen: set[str] = set()
+    result: list[str] = []
+    for term in terms:
+        normalized = _normalize_for_match(term)
+        if len(normalized) < 2 or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(term)
+    return result[:12]
+
+
+def _is_covered(report_markdown: str, evidence: Any) -> bool:
+    report = _normalize_for_match(report_markdown)
+    evidence_text = _normalize_for_match(evidence)
+    if not evidence_text:
+        return True
+    if len(evidence_text) <= 24 and evidence_text in report:
+        return True
+    terms = _coverage_terms(evidence)
+    if not terms:
+        return False
+    matched = sum(1 for term in terms if _normalize_for_match(term) in report)
+    required = 1 if len(terms) <= 2 else 2
+    return matched >= required
+
+
+def _sentence_with_keywords(text: str, keywords: list[str]) -> str:
+    for sentence in re.split(r"[。！？!?]\s*", text or ""):
+        if any(keyword in sentence for keyword in keywords):
+            return sentence.strip()
+    return ""
+
+
+def _coverage_preview(value: Any, limit: int = 160) -> str:
+    text = re.sub(r"\s+", " ", _flatten_text(value)).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _coverage_entry(material: dict[str, Any], label: str, evidence: Any, category: str, report_markdown: str) -> dict[str, Any]:
+    covered = _is_covered(report_markdown, evidence)
+    return {
+        "label": label,
+        "category": category,
+        "covered": covered,
+        "menu_code": material.get("menu_code") or "",
+        "articleid": material.get("articleid") or "",
+        "title": material.get("title") or "",
+        "evidence_preview": _coverage_preview(evidence),
+    }
+
+
+def _material_coverage_entries(material: dict[str, Any], report_markdown: str) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for label, key in [
+        ("发布时间", "audittime"),
+        ("地区", "areaname"),
+        ("发布机构", "publicorg"),
+    ]:
+        if material.get(key):
+            entries.append(_coverage_entry(material, label, material.get(key), "metadata", report_markdown))
+
+    for label, key in [
+        ("价格规则", "price_rules"),
+        ("时间节点", "time_requirements"),
+        ("产品范围", "product_scope"),
+        ("企业要求", "enterprise_requirements"),
+        ("执行要求", "execution_requirements"),
+        ("主材料核心规则", "policy_rules"),
+    ]:
+        if material.get(key):
+            entries.append(_coverage_entry(material, label, material.get(key), "structured_rule", report_markdown))
+
+    risk_sentence = _sentence_with_keywords(
+        _text(material.get("content_text")),
+        ["暂停", "撤销", "取消", "信用", "逾期", "不予", "不得", "处罚", "处理"],
+    )
+    if risk_sentence:
+        entries.append(_coverage_entry(material, "暂停/撤销/信用风险", risk_sentence, "risk", report_markdown))
+
+    for attachment in material.get("attachments") or []:
+        if not isinstance(attachment, dict) or not _attachment_is_usable(attachment):
+            continue
+        if attachment.get("summary") or attachment.get("key_facts"):
+            entries.append(
+                _coverage_entry(
+                    material,
+                    "附件摘要",
+                    {
+                        "filename": attachment.get("filename"),
+                        "summary": attachment.get("summary"),
+                        "key_facts": attachment.get("key_facts"),
+                    },
+                    "attachment",
+                    report_markdown,
+                )
+            )
+        for table in attachment.get("table_summaries") or []:
+            if not isinstance(table, dict):
+                continue
+            entries.append(
+                _coverage_entry(
+                    material,
+                    "附件表格摘要",
+                    {
+                        "filename": attachment.get("filename"),
+                        "sheet_name": table.get("sheet_name"),
+                        "headers": table.get("headers"),
+                        "key_columns": table.get("key_columns"),
+                        "summary": table.get("summary"),
+                        "business_value": table.get("business_value"),
+                    },
+                    "attachment_table",
+                    report_markdown,
+                )
+            )
+    return entries
+
+
+def _build_report_coverage(record: dict[str, Any], pack: dict[str, Any], pack_diag: dict[str, Any], report_chars: int) -> dict[str, Any]:
+    report_markdown = _text(record.get("report_markdown"))
+    primary = [item for item in (pack.get("primary_materials") or []) if isinstance(item, dict)]
+    all_entries: list[dict[str, Any]] = []
+    material_coverage: list[dict[str, Any]] = []
+    for material in primary:
+        entries = _material_coverage_entries(material, report_markdown)
+        all_entries.extend(entries)
+        total = len(entries)
+        covered = sum(1 for item in entries if item["covered"])
+        material_coverage.append(
+            {
+                "menu_code": material.get("menu_code") or "",
+                "articleid": material.get("articleid") or "",
+                "title": material.get("title") or "",
+                "coverage_score": int(round((covered / total) * 100)) if total else 100,
+                "covered_count": covered,
+                "missing_count": total - covered,
+                "missing_labels": [item["label"] for item in entries if not item["covered"]],
+            }
+        )
+
+    covered_items = [item for item in all_entries if item["covered"]]
+    missing_items = [item for item in all_entries if not item["covered"]]
+    total_items = len(all_entries)
+    coverage_score = int(round((len(covered_items) / total_items) * 100)) if total_items else 100
+    missing_critical = [item for item in missing_items if item["category"] in {"structured_rule", "risk", "attachment_table"}]
+    suggested_min = 1200 if pack_diag.get("estimated_evidence_level") in {"high", "very_high"} else 800
+    is_short_by_coverage = bool(missing_critical and (coverage_score < 80 or report_chars < suggested_min))
+
+    attachment_items = [item for item in all_entries if item["category"] in {"attachment", "attachment_table"}]
+    attachment_missing = [item for item in attachment_items if not item["covered"]]
+    return {
+        "coverage_score": coverage_score,
+        "covered_items": covered_items,
+        "missing_items": missing_items,
+        "main_material_coverage": material_coverage,
+        "attachment_coverage": {
+            "total_items": len(attachment_items),
+            "covered_items": len(attachment_items) - len(attachment_missing),
+            "missing_items": len(attachment_missing),
+            "missing_labels": [item["label"] for item in attachment_missing],
+        },
+        "is_report_too_short_by_coverage": is_short_by_coverage,
+    }
+
+
 def build_run_diagnostics(record: dict[str, Any], pack: dict[str, Any] | None = None, dify_pack: dict[str, Any] | None = None) -> dict[str, Any]:
     pack_diag = build_pack_diagnostics(pack or {}, dify_pack)
     markdown = _text(record.get("report_markdown"))
-    report_chars = _safe_len(markdown)
+    report_chars = _wps_like_word_count(markdown)
     quality_check = record.get("quality_check") if isinstance(record.get("quality_check"), dict) else {}
     issues = quality_check.get("issues") if isinstance(quality_check.get("issues"), list) else []
     generation_warnings = record.get("generation_warnings") if isinstance(record.get("generation_warnings"), list) else []
     remaining_issues = record.get("remaining_issues") if isinstance(record.get("remaining_issues"), list) else []
     versions = _version_items(record, report_chars)
     first_version_chars = next((int(item.get("chars") or 0) for item in versions if int(item.get("version") or 0) == 1), 0)
+    coverage = _build_report_coverage(record, pack or {}, pack_diag, report_chars)
 
     diagnosis = [item for item in pack_diag.get("diagnosis", []) if item.get("code") != "OK"]
     evidence_level = pack_diag["estimated_evidence_level"]
@@ -564,6 +839,14 @@ def build_run_diagnostics(record: dict[str, Any], pack: dict[str, Any] | None = 
                 "报告结尾或结构存在截断迹象，建议检查模型最大输出长度或 Dify 返回解析。",
             )
         )
+    if coverage["is_report_too_short_by_coverage"]:
+        diagnosis.append(
+            _diagnosis(
+                "REPORT_MISSING_CORE_COVERAGE",
+                "warning",
+                "报告遗漏主材料核心规则、风险后果或附件表格摘要，建议补齐后再判断字数是否足够。",
+            )
+        )
     if not diagnosis:
         diagnosis.append(_diagnosis("OK", "normal", "报告长度与证据包信息量基本匹配。"))
 
@@ -595,6 +878,7 @@ def build_run_diagnostics(record: dict[str, Any], pack: dict[str, Any] | None = 
             "remaining_issues_count": len(remaining_issues),
         },
         "versions": versions,
+        "coverage": coverage,
         "diagnosis": diagnosis,
     }
 

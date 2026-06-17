@@ -62,6 +62,11 @@ ATTACHMENT_EXTENSIONS = {
     ".xlsx",
     ".xlsm",
     ".csv",
+    ".txt",
+    ".text",
+    ".html",
+    ".htm",
+    ".zip",
 }
 MAX_ATTACHMENT_BYTES = 60 * 1024 * 1024
 DEFAULT_MAX_COMBINED_CHARS = 120_000
@@ -764,9 +769,79 @@ def _limit_text(value: Any, limit: int) -> str:
     return f"{text[:limit]}……"
 
 
-def _compact_attachment_for_dify(attachment: dict[str, Any]) -> dict[str, Any]:
+_DIFY_USABLE_ATTACHMENT_STATUSES = {
+    "stream_parsed",
+    "temp_file_parsed",
+    "parsed_text",
+    "parsed_summary",
+    "parsed_table_summary",
+    "too_large_summary_only",
+}
+
+
+def _material_content_text_length(material: dict[str, Any]) -> int:
+    explicit = material.get("content_text_length")
+    if isinstance(explicit, int) and explicit >= 0:
+        return explicit
+    return len(str(material.get("content_text") or "").strip())
+
+
+def _attachment_is_usable_for_dify(attachment: dict[str, Any]) -> bool:
+    parse_status = str(attachment.get("parse_status") or "").strip()
+    parse_statuses = attachment.get("parse_statuses") if isinstance(attachment.get("parse_statuses"), list) else []
+    return parse_status in _DIFY_USABLE_ATTACHMENT_STATUSES or any(item in _DIFY_USABLE_ATTACHMENT_STATUSES for item in parse_statuses)
+
+
+def _material_attachment_evidence_chars(material: dict[str, Any]) -> int:
+    total = 0
+    for attachment in material.get("attachments") or []:
+        if not isinstance(attachment, dict) or not _attachment_is_usable_for_dify(attachment):
+            continue
+        total += len(str(attachment.get("summary") or "").strip())
+        total += len(json.dumps(attachment.get("key_facts") or [], ensure_ascii=False))
+        total += len(json.dumps(attachment.get("important_sections") or [], ensure_ascii=False))
+        for table in attachment.get("table_summaries") or []:
+            if isinstance(table, dict):
+                total += len(
+                    json.dumps(
+                        {
+                            "summary": table.get("summary"),
+                            "business_value": table.get("business_value"),
+                            "headers": table.get("headers"),
+                            "key_columns": table.get("key_columns"),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+    return total
+
+
+def _is_attachment_led_primary_material(material: dict[str, Any]) -> bool:
+    if _material_content_text_length(material) >= 800:
+        return False
+    usable_core_attachment = any(
+        isinstance(attachment, dict)
+        and bool(attachment.get("core_attachment"))
+        and _attachment_is_usable_for_dify(attachment)
+        for attachment in material.get("attachments") or []
+    )
+    return usable_core_attachment and _material_attachment_evidence_chars(material) >= 800
+
+
+def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "primary") -> dict[str, Any]:
     table_summaries: list[dict[str, Any]] = []
-    table_limit = 5 if attachment.get("core_attachment") else 3
+    if role == "auxiliary":
+        table_limit = 2 if attachment.get("core_attachment") else 1
+        table_header_limit = 18
+        table_key_column_limit = 12
+        table_summary_limit = 300
+        table_business_limit = 180
+    else:
+        table_limit = 5 if attachment.get("core_attachment") else 3
+        table_header_limit = 30
+        table_key_column_limit = 20
+        table_summary_limit = 500
+        table_business_limit = 300
     for table in list(attachment.get("table_summaries") or [])[:table_limit]:
         if not isinstance(table, dict):
             continue
@@ -775,8 +850,8 @@ def _compact_attachment_for_dify(attachment: dict[str, Any]) -> dict[str, Any]:
                 "sheet_name": table.get("sheet_name") or "",
                 "rows": table.get("rows") or 0,
                 "columns_count": table.get("columns_count") or 0,
-                "headers": list(table.get("headers") or [])[:30],
-                "key_columns": list(table.get("key_columns") or [])[:20],
+                "headers": list(table.get("headers") or [])[:table_header_limit],
+                "key_columns": list(table.get("key_columns") or [])[:table_key_column_limit],
                 "contains_enterprise": bool(table.get("contains_enterprise")),
                 "contains_product": bool(table.get("contains_product")),
                 "contains_registration_cert": bool(table.get("contains_registration_cert")),
@@ -785,11 +860,20 @@ def _compact_attachment_for_dify(attachment: dict[str, Any]) -> dict[str, Any]:
                 "contains_price": bool(table.get("contains_price")),
                 "contains_selected_status": bool(table.get("contains_selected_status")),
                 "contains_purchase_volume": bool(table.get("contains_purchase_volume")),
-                "summary": _limit_text(table.get("summary"), 500),
-                "business_value": _limit_text(table.get("business_value"), 300),
+                "summary": _limit_text(table.get("summary"), table_summary_limit),
+                "business_value": _limit_text(table.get("business_value"), table_business_limit),
             }
         )
-    summary_limit = 1400 if attachment.get("core_attachment") else 700
+    if role == "auxiliary":
+        summary_limit = 500
+        key_fact_limit = 8
+        section_limit = 4
+        section_chars = 220
+    else:
+        summary_limit = 1400 if attachment.get("core_attachment") else 700
+        key_fact_limit = 18
+        section_limit = 8
+        section_chars = 360
     return {
         "articleattid": attachment.get("articleattid") or "",
         "filename": attachment.get("filename") or "",
@@ -803,20 +887,30 @@ def _compact_attachment_for_dify(attachment: dict[str, Any]) -> dict[str, Any]:
         "cache_status": attachment.get("cache_status") or "",
         "text_length": attachment.get("text_length") or 0,
         "summary": _limit_text(attachment.get("summary"), summary_limit),
-        "key_facts": list(attachment.get("key_facts") or [])[:18],
-        "important_sections": [_limit_text(item, 360) for item in list(attachment.get("important_sections") or [])[:8]],
+        "key_facts": list(attachment.get("key_facts") or [])[:key_fact_limit],
+        "important_sections": [_limit_text(item, section_chars) for item in list(attachment.get("important_sections") or [])[:section_limit]],
         "table_summaries": table_summaries,
     }
 
 
-def _compact_material_for_dify(material: dict[str, Any], role: str) -> dict[str, Any]:
-    content_limit = 5200 if role == "primary" else 1200
+def _compact_material_for_dify(
+    material: dict[str, Any],
+    role: str,
+    *,
+    content_limit: int | None = None,
+    attachment_limit: int | None = None,
+) -> dict[str, Any]:
+    content_limit = content_limit if content_limit is not None else (5200 if role == "primary" else 1200)
+    attachment_limit = attachment_limit if attachment_limit is not None else (8 if role == "primary" else 5)
     attachments = sorted(
         [item for item in list(material.get("attachments") or [])[:12] if isinstance(item, dict)],
         key=lambda item: (not bool(item.get("core_attachment")), int(item.get("sortnum") or 0), str(item.get("articleattid") or "")),
     )
     compact = {
         "material_role": material.get("material_role") or role,
+        "evidence_source_type": "attachment_led_primary"
+        if role == "primary" and _is_attachment_led_primary_material(material)
+        else ("primary_body" if role == "primary" else "auxiliary_reference"),
         "menu_code": material.get("menu_code") or "",
         "articleid": material.get("articleid") or "",
         "title": material.get("title") or "",
@@ -836,11 +930,13 @@ def _compact_material_for_dify(material: dict[str, Any], role: str) -> dict[str,
         "belongproject": material.get("belongproject") or "",
         "projectabbreviation": material.get("projectabbreviation") or "",
         "summary": _limit_text(material.get("summary"), 500),
-        "content_text": _limit_text(material.get("content_text"), content_limit),
+        "content_text": str(material.get("content_text") or "")
+        if len(str(material.get("content_text") or "")) <= content_limit
+        else _limit_text(material.get("content_text"), content_limit),
         "content_text_length": material.get("content_text_length") or len(str(material.get("content_text") or "")),
         "content_summary": _limit_text(material.get("content_summary"), 700),
         "key_facts": list(material.get("key_facts") or [])[:16],
-        "attachments": [_compact_attachment_for_dify(item) for item in attachments[:8]],
+        "attachments": [_compact_attachment_for_dify(item, role=role) for item in attachments[:attachment_limit]],
         "warnings": [_limit_text(item, 220) for item in list(material.get("warnings") or [])[:6]],
     }
     if role == "primary":
@@ -863,19 +959,52 @@ def _compact_material_for_dify(material: dict[str, Any], role: str) -> dict[str,
                 "relevance_score": material.get("relevance_score") or 0,
                 "usable_points": list(material.get("usable_points") or [])[:8],
                 "relevant_snippets": list(material.get("relevant_snippets") or [])[:6],
-                "attachment_summaries": list(material.get("attachment_summaries") or [])[:4],
+                "attachment_summaries": [
+                    _compact_attachment_for_dify(item, role="auxiliary")
+                    for item in list(material.get("attachment_summaries") or [])[:3]
+                    if isinstance(item, dict)
+                ],
             }
         )
     return compact
 
 
+def _compact_primary_content_limit(primary_source: list[dict[str, Any]], auxiliary_source: list[dict[str, Any]], original_pack_chars: int, max_chars: int) -> int:
+    primary_count = max(1, len(primary_source))
+    if primary_count == 1 and original_pack_chars <= max_chars * 1.1:
+        return 20000
+    if primary_count == 1:
+        return 16000
+    if primary_count == 2:
+        return 10000
+    return 7600
+
+
 def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000) -> dict[str, Any]:
-    primary = [_compact_material_for_dify(item, "primary") for item in list(pack.get("primary_materials") or [])[:3]]
-    auxiliary = [_compact_material_for_dify(item, "auxiliary") for item in list(pack.get("auxiliary_materials") or [])[:10]]
     original_pack_chars = len(json.dumps(pack, ensure_ascii=False, sort_keys=True))
+    primary_source = [item for item in list(pack.get("primary_materials") or [])[:3] if isinstance(item, dict)]
+    auxiliary_source = [item for item in list(pack.get("auxiliary_materials") or [])[:10] if isinstance(item, dict)]
+    primary_content_limit = _compact_primary_content_limit(primary_source, auxiliary_source, original_pack_chars, max_chars)
+    primary = [
+        _compact_material_for_dify(
+            item,
+            "primary",
+            content_limit=primary_content_limit,
+            attachment_limit=10 if len(primary_source) == 1 else 8,
+        )
+        for item in primary_source
+    ]
+    auxiliary = [_compact_material_for_dify(item, "auxiliary", content_limit=900, attachment_limit=4) for item in auxiliary_source]
     omitted_content: list[dict[str, str]] = [
         {"type": "attachment_full_text", "reason": "附件全文和 Excel 全量行数据不进入 Dify，仅保留摘要和结构化信息。"}
     ]
+    if any(len([item for item in list(material.get("attachments") or []) if isinstance(item, dict)]) > 5 for material in list(pack.get("auxiliary_materials") or []) if isinstance(material, dict)):
+        omitted_content.append(
+            {
+                "type": "auxiliary_attachment_overflow",
+                "reason": "辅助材料附件较多，Dify 精简版仅保留核心或排序靠前的结构化摘要，避免工作流超时。",
+            }
+        )
     compact: dict[str, Any] = {
         "pack_variant": "dify_compact",
         "pack_id": pack.get("pack_id") or "",
@@ -891,11 +1020,12 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
     }
     compact["generation_guidance"]["attachment_reporting_rule"] = (
         "附件未解析、仅元数据、下载失败、解析失败等材料完整性提示不得混入正式分析段落；"
-        "如核心附件不可用，只能在报告末尾统一加入“资料说明”，并避免编造企业、产品、价格、中选结果。"
+        "材料完整性限制只写入 generation_warnings，不写入 report_markdown；"
+        "如核心附件不可用，应避免编造企业、产品、价格、中选结果。"
     )
-    compact["generation_guidance"]["material_limitation_statement_template"] = (
-        "资料说明：本报告基于当前已解析的公告正文、附件摘要及结构化信息生成。"
-        "部分核心附件如未解析到具体产品、企业、价格明细，本文不对相关明细作展开判断，具体结果应以官方附件为准。"
+    compact["generation_guidance"]["attachment_led_primary_rule"] = (
+        "当主材料正文较短但 evidence_source_type=attachment_led_primary，且核心附件已解析为摘要或表格结构时，"
+        "应以该主材料的核心附件摘要、key_facts、important_sections、table_summaries 作为主体依据展开报告。"
     )
     compact["primary_evidence"] = {
         "materials": [
@@ -917,8 +1047,26 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         "comparison_points": list((pack.get("auxiliary_evidence") or {}).get("comparison_points") or [])[:10],
     }
     compact["attachment_evidence"] = {
-        "parsed_summaries": list((pack.get("attachment_evidence") or {}).get("parsed_summaries") or [])[:10],
-        "table_summaries": list((pack.get("attachment_evidence") or {}).get("table_summaries") or [])[:8],
+        "parsed_summaries": [
+            _compact_attachment_for_dify(item, role="auxiliary")
+            for item in sorted(
+                [entry for entry in list((pack.get("attachment_evidence") or {}).get("parsed_summaries") or []) if isinstance(entry, dict)],
+                key=lambda entry: (not bool(entry.get("core_attachment")), str(entry.get("articleattid") or ""), str(entry.get("filename") or "")),
+            )[:6]
+        ],
+        "table_summaries": [
+            {
+                "sheet_name": table.get("sheet_name") or "",
+                "rows": table.get("rows") or 0,
+                "columns_count": table.get("columns_count") or 0,
+                "headers": list(table.get("headers") or [])[:18],
+                "key_columns": list(table.get("key_columns") or [])[:12],
+                "summary": _limit_text(table.get("summary"), 300),
+                "business_value": _limit_text(table.get("business_value"), 180),
+            }
+            for table in list((pack.get("attachment_evidence") or {}).get("table_summaries") or [])[:5]
+            if isinstance(table, dict)
+        ],
         "warnings": [],
     }
     compact["dify_compacted"] = True
@@ -930,6 +1078,8 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         "核心附件保留摘要、关键事实和表格结构化摘要",
         "辅助材料优先保留相关片段和可用要点",
         "删除附件全文、Excel 全量行数据和低价值技术 warning",
+        "单主材料且未接近长度限制时优先保留更多主材料正文",
+        "多主材料时按篇均衡保留主材料正文，辅助材料优先压缩",
     ]
     compact["omitted_content"] = omitted_content
     compact["dify_compaction_note"] = "Structured compact evidence pack for Dify variable-size limits. Use ?full=true for full evidence pack."
@@ -1123,7 +1273,7 @@ def _normalize_dify_result(response_json: dict[str, Any], pack_id: str) -> dict[
         "status": status,
         "pack_id": str(output.get("pack_id") or pack_id),
         "report_title": str(output.get("report_title") or ""),
-        "report_markdown": str(output.get("report_markdown") or ""),
+        "report_markdown": _clean_model_output(str(output.get("report_markdown") or "")),
         "version": int(output.get("version") or 1),
         "quality_check": quality_check,
         "generation_warnings": warnings,
@@ -1142,6 +1292,27 @@ def _is_unusable_report_markdown(markdown: Any) -> bool:
     return len(text) < 8
 
 
+def _is_fragmentary_dify_report_markdown(markdown: Any, pack: dict[str, Any]) -> bool:
+    text = str(markdown or "").strip()
+    if _is_unusable_report_markdown(text):
+        return True
+    has_intro_or_first_section = bool(re.search(r"(^|\n)\s*(?:#{1,6}\s+)?(?:导语|一[、.．]|1[、.．])", text))
+    has_report_structure = bool(re.search(r"(^|\n)\s*(?:#{1,6}\s+)?(?:导语|一[、.．]|1[、.．]|二[、.．])", text))
+    starts_midstream = bool(re.match(r"^\s*(?:[-*]\s+|\|)", text))
+    starts_after_first_section = bool(re.match(r"^\s*(?:#{1,6}\s+)?(?:二|三|四|五|六|七|八|九|十|2|3|4|5|6|7|8|9|10)[、.．]", text))
+    if starts_after_first_section and not has_intro_or_first_section:
+        return True
+    if len(text) < 500 and (starts_midstream or not has_report_structure):
+        return True
+    diagnostics = build_pack_diagnostics(pack)
+    weighted_chars = int(diagnostics.get("weighted_evidence_chars") or diagnostics.get("total_content_chars") or 0)
+    if weighted_chars < 1000:
+        return False
+    if len(text) < 700 and (starts_midstream or not has_report_structure):
+        return True
+    return False
+
+
 def _fallback_text_snippet(text: str, limit: int = 380) -> str:
     clean = _normalize_text(text)
     if not clean:
@@ -1157,12 +1328,12 @@ def _fallback_report_from_pack(pack: dict[str, Any]) -> tuple[str, str, list[str
     main = primary[0] if primary else {}
     title = str(main.get("title") or "材料分析报告").strip()
     report_title = title if title.endswith("分析报告") else f"{title}分析报告"
-    warnings = ["Dify 返回的报告正文过短或为占位内容，后端已基于 evidence_pack 生成保守兜底报告，请人工复核。"]
+    warnings = ["报告生成结果过短或疑似只返回修订片段，已根据证据包生成保守兜底报告，请人工复核。"]
 
     lines: list[str] = [
-        "## 一、材料概况",
-        f"本报告基于已选择的主材料《{title or '未命名材料'}》生成。"
-        "由于 Dify 工作流返回的正文无有效内容，以下内容为后端依据 evidence_pack 自动整理的保守版本，仅用于避免空白报告。",
+        "## 导语",
+        f"本报告基于已选择的主材料《{title or '未命名材料'}》整理。"
+        "由于本次自动生成结果未形成完整正文，以下内容按当前可读取材料进行保守梳理，供人工复核后使用。",
     ]
     meta_parts = []
     for label, field in [
@@ -1181,14 +1352,14 @@ def _fallback_report_from_pack(pack: dict[str, Any]) -> tuple[str, str, list[str
 
     summary = _clean_inline_text(main.get("summary") or main.get("content_summary") or "")
     content_text = _normalize_text(main.get("content_text") or "")
-    lines.extend(["", "## 二、核心内容梳理"])
+    lines.extend(["", "## 一、核心内容梳理"])
     if summary:
         lines.append(f"材料摘要显示：{summary}")
     snippet = _fallback_text_snippet(content_text, 700)
     if snippet:
         lines.append(f"从正文可见，材料主要内容包括：{snippet}")
     else:
-        lines.append("当前主材料正文为空或无法读取，只能基于标题、摘要和元数据进行有限整理。")
+        lines.append("当前公告正文较简略，具体规则主要见随文附件；以下分析以可读取的附件摘要和结构化要点为主要依据。")
 
     facts = [item for item in main.get("key_facts") or [] if isinstance(item, dict)]
     if facts:
@@ -1201,25 +1372,44 @@ def _fallback_report_from_pack(pack: dict[str, Any]) -> tuple[str, str, list[str
 
     passages = main.get("important_passages") if isinstance(main.get("important_passages"), list) else []
     if passages:
-        lines.extend(["", "## 三、可关注规则与执行要点"])
+        lines.extend(["", "## 二、可关注规则与执行要点"])
         for item in passages[:6]:
             if isinstance(item, dict) and item.get("text"):
                 lines.append(f"- {item.get('text')}")
 
-    lines.extend(["", "## 四、附件与辅助材料情况"])
+    lines.extend(["", "## 三、附件要点补充"])
     attachments = [item for item in main.get("attachments") or [] if isinstance(item, dict)]
     core_unavailable = False
+    attachment_detail_added = False
     if attachments:
         for attachment in attachments[:10]:
             filename = _clean_inline_text(attachment.get("filename") or "未命名附件")
             summary_text = _clean_inline_text(attachment.get("summary") or "")
             if summary_text:
-                lines.append(f"- {filename}：已解析，摘要为：{_fallback_text_snippet(summary_text, 260)}")
+                lines.append(f"- {filename}：{_fallback_text_snippet(summary_text, 900)}")
+                attachment_detail_added = True
+            key_facts = [str(item).strip() for item in attachment.get("key_facts") or [] if str(item).strip()]
+            if key_facts:
+                lines.append("  其中可关注事实包括：")
+                lines.extend([f"  - {fact}" for fact in key_facts[:10]])
+                attachment_detail_added = True
+            sections = [item for item in attachment.get("important_sections") or [] if isinstance(item, dict)]
+            if sections:
+                lines.append("  附件分节信息显示：")
+                for section in sections[:6]:
+                    section_title = _clean_inline_text(section.get("title") or "相关章节")
+                    section_summary = _fallback_text_snippet(str(section.get("summary") or ""), 220)
+                    if section_summary:
+                        lines.append(f"  - {section_title}：{section_summary}")
+                        attachment_detail_added = True
             elif attachment.get("core_attachment"):
                 core_unavailable = True
+        if not attachment_detail_added:
+            lines.append("随文附件未形成可用于展开分析的摘要，报告不展开产品、价格或项目明细。")
     else:
         lines.append("主材料未关联附件。")
     if auxiliary:
+        lines.extend(["", "## 四、辅助材料参考"])
         lines.append("")
         lines.append("辅助材料仅用于背景补充和对照，不覆盖主材料结论：")
         for item in auxiliary[:5]:
@@ -1234,34 +1424,25 @@ def _fallback_report_from_pack(pack: dict[str, Any]) -> tuple[str, str, list[str
             "根据现有材料，该事项涉及医用耗材集采结果执行、医保支付标准衔接及相关主体执行安排。"
             "企业需要重点核对产品是否属于通知覆盖范围、是否涉及未中选产品医保支付标准、执行时间和地方落地要求。"
             "医疗机构和经办环节则需要关注采购结果执行、支付标准衔接和目录信息维护等事项。",
-            "",
-            "## 六、使用限制",
-            "本报告为 Dify 输出异常时的后端兜底版本。涉及附件原文、表格明细、价格标准等内容，只有在附件已成功解析并进入 evidence_pack 后，才能作为正式分析依据。",
         ]
     )
     if core_unavailable:
-        lines.extend(
-            [
-                "",
-                "## 资料说明",
-                "本报告基于当前已解析的公告正文、附件摘要及结构化信息生成。部分核心附件如未解析到具体产品、企业、价格明细，本文不对相关明细作展开判断，具体结果应以官方附件为准。",
-            ]
-        )
+        warnings.append("核心附件未形成可用摘要，报告未展开产品、企业、价格或中选结果明细。")
     return report_title, "\n\n".join(lines), warnings
 
 
 def _repair_unusable_dify_result(result: dict[str, Any], pack: dict[str, Any]) -> dict[str, Any]:
-    if not _is_unusable_report_markdown(result.get("report_markdown")):
+    if not _is_fragmentary_dify_report_markdown(result.get("report_markdown"), pack):
         return result
     title, markdown, fallback_warnings = _fallback_report_from_pack(pack)
     warnings = [*list(result.get("warnings") or []), *list(result.get("generation_warnings") or []), *fallback_warnings]
     issue = {
-        "issue_id": "Q_DIFY_EMPTY_REPORT",
+        "issue_id": "Q_DIFY_FRAGMENTARY_REPORT",
         "severity": "high",
-        "problem_type": "empty_or_placeholder_report",
+        "problem_type": "empty_or_fragmentary_report",
         "report_text": str(result.get("report_markdown") or ""),
         "source_basis": "evidence_pack",
-        "fix_instruction": "Dify 返回正文过短或为占位符，已启用后端兜底报告，仍需人工复核或重新运行工作流。",
+        "fix_instruction": "Dify 返回正文过短、占位或疑似只包含修订片段，已启用后端兜底报告，仍需人工复核或重新运行工作流。",
     }
     repaired = dict(result)
     repaired.update(
@@ -1466,6 +1647,15 @@ def _attachment_request_options(req: SelectionPreviewRequest) -> dict[str, Any]:
 
 
 CORE_ATTACHMENT_KEYWORDS = [
+    ("医疗服务价格项目", "医疗服务价格项目"),
+    ("服务价格项目", "医疗服务价格项目"),
+    ("价格项目", "医疗服务价格项目"),
+    ("收费项目", "医疗服务价格项目"),
+    ("医保支付政策", "医疗服务价格项目"),
+    ("支付政策", "医疗服务价格项目"),
+    ("项目目录", "医疗服务价格项目"),
+    ("价格标准", "医疗服务价格项目"),
+    ("规范整合", "医疗服务价格项目"),
     ("中选结果", "中选结果"),
     ("结果表", "中选结果"),
     ("明细表", "产品清单"),
@@ -2114,13 +2304,19 @@ def _execute_analysis_run_background(pack_id: str, run_id: str) -> None:
                 repair_exc.__class__.__name__,
             )
     except DifyWorkflowError as exc:
+        warnings = list(record.get("warnings") or [])
+        error_message = exc.message
+        if exc.code == "DIFY_TIMEOUT":
+            error_message = "Dify 工作流调用超时：证据包较大或生成/质检耗时过长"
+            warnings.append("证据包较大时可能导致 Dify 超时，可减少辅助材料、缩短辅助附件摘要或稍后重试。")
         record.update(
             {
                 "success": False,
                 "status": "failed",
                 "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
-                "error_message": exc.message,
+                "error_message": error_message,
                 "error_detail": exc.detail,
+                "warnings": warnings,
             }
         )
         _write_analysis_run(record)
@@ -2255,7 +2451,7 @@ def get_analysis_run_report(run_id: str) -> AnalysisRunReportResponse | JSONResp
         run_id=str(record.get("run_id") or run_id),
         pack_id=str(record.get("pack_id") or ""),
         report_title=str(record.get("report_title") or ""),
-        report_markdown=str(record.get("report_markdown") or ""),
+        report_markdown=_clean_model_output(str(record.get("report_markdown") or "")),
         quality_check=record.get("quality_check") if isinstance(record.get("quality_check"), dict) else {"passed": None, "issues": []},
         version=int(record.get("version") or 1),
         warnings=list(record.get("warnings") or record.get("generation_warnings") or []),
@@ -2309,7 +2505,7 @@ def revise_analysis_run(run_id: str, req: AnalysisRunReviseRequest) -> AnalysisR
         }
     )
     report_title = str(result.get("report_title") or record.get("report_title") or "")
-    report_markdown = str(result.get("report_markdown") or current_report)
+    report_markdown = _clean_model_output(str(result.get("report_markdown") or current_report))
     quality_check = result.get("quality_check") if isinstance(result.get("quality_check"), dict) else {"passed": None, "issues": []}
     warnings = list(result.get("warnings") or result.get("generation_warnings") or [])
     revision_record = {
@@ -5572,6 +5768,79 @@ def _markdown_to_docx(markdown: str, path: Path, title: str) -> None:
     doc.save(path)
 
 
+def _strip_generated_material_note_sections(text: str) -> str:
+    lines = str(text or "").splitlines()
+    output: list[str] = []
+    skip_level: int | None = None
+
+    for line in lines:
+        heading_match = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            heading_text = _strip_markdown(heading_match.group(2))
+            compact_heading = re.sub(r"\s+", "", _normalize_text(heading_text))
+            is_material_note = "资料说明" in compact_heading
+            is_declaration = compact_heading in {"声明", "聲明"}
+            if is_material_note or is_declaration:
+                skip_level = level
+                continue
+            if skip_level is not None and level <= skip_level:
+                skip_level = None
+
+        if skip_level is None:
+            output.append(line)
+
+    return "\n".join(output).strip()
+
+
+def _strip_technical_attachment_note_lines(text: str) -> str:
+    technical_patterns = [
+        r"OCR\s*识别",
+        r"数字来源于.*OCR",
+        r"OCR.*误差",
+        r"OCR.*错误",
+        r"附件\s*PDF\s*因",
+        r"附件.*文件过大",
+        r"因大小限制",
+        r"大小限制",
+        r"仅解析",
+        r"元数据",
+        r"metadata[_ -]?only",
+        r"未解析",
+        r"未能提取",
+        r"系统未获取",
+        r"解析失败",
+        r"识别错误",
+        r"识别有误",
+        r"识别问题",
+        r"原文.*识别",
+        r"根据.*修正",
+        r"暂无法确认",
+        r"以(?:正式|官方)文件为准",
+        r"资料说明\s*[:：]",
+    ]
+    technical_union = "|".join(f"(?:{pattern})" for pattern in technical_patterns)
+    output: list[str] = []
+    for line in str(text or "").splitlines():
+        stripped_line = line.strip()
+        compact = _normalize_text(_strip_markdown(stripped_line))
+        if not compact:
+            output.append(line)
+            continue
+        if re.match(r"^\s*(?:>\s*)?(?:注|资料说明)\s*[:：]", stripped_line) and any(
+            re.search(pattern, compact, flags=re.I) for pattern in technical_patterns
+        ):
+            continue
+        cleaned = line
+        cleaned = re.sub(rf"（[^（）]*(?:{technical_union})[^（）]*）", "", cleaned, flags=re.I)
+        cleaned = re.sub(rf"\([^()]*({technical_union})[^()]*\)", "", cleaned, flags=re.I)
+        cleaned = re.sub(rf"[^。！？!?；;\n]*({technical_union})[^。！？!?；;\n]*[。！？!?；;]?", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).rstrip()
+        if _normalize_text(_strip_markdown(cleaned)):
+            output.append(cleaned)
+    return "\n".join(output).strip()
+
+
 def _clean_model_output(text: str) -> str:
     text = str(text or "")
     text = text.replace("\ufeff", "")
@@ -5635,6 +5904,8 @@ def _clean_model_output(text: str) -> str:
     if first_report_line and first_report_line > 0:
         text = "\n".join(lines[first_report_line:])
 
+    text = _strip_generated_material_note_sections(text)
+    text = _strip_technical_attachment_note_lines(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 

@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends antiword fonts-noto-cjk \
+    && apt-get install -y --no-install-recommends antiword libreoffice-writer fonts-noto-cjk poppler-utils tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt
@@ -20,6 +20,7 @@ COPY dify-db-backups ./dify-db-backups
 COPY dify-chatflow-medical-notice-report.yml ./dify-chatflow-medical-notice-report.yml
 COPY dify-workflow-medical-notice-report.yml ./dify-workflow-medical-notice-report.yml
 COPY workflow-v2-medical-notice-report.yml ./workflow-v2-medical-notice-report.yml
+COPY dify_workflow_pack_id_human_style.yml ./dify_workflow_pack_id_human_style.yml
 COPY README.md ./README.md
 COPY NEXT_CHAT_HANDOFF.md ./NEXT_CHAT_HANDOFF.md
 
