@@ -394,6 +394,7 @@ class AnalysisRunReportResponse(BaseModel):
     report_title: str = ""
     report_markdown: str = ""
     quality_check: dict[str, Any] = Field(default_factory=dict)
+    quality_gate: dict[str, Any] = Field(default_factory=dict)
     version: int = 1
     warnings: list[str] = Field(default_factory=list)
     remaining_issues: list[Any] = Field(default_factory=list)
@@ -828,7 +829,61 @@ def _is_attachment_led_primary_material(material: dict[str, Any]) -> bool:
     return usable_core_attachment and _material_attachment_evidence_chars(material) >= 800
 
 
-def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "primary") -> dict[str, Any]:
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.getenv(name) or "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(str(os.getenv(name) or "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _dify_input_thresholds() -> dict[str, int]:
+    return {
+        "full_input": max(1000, _env_int("DIFY_FULL_INPUT_MAX_CHARS", 60_000)),
+        "light_compact": max(10_000, _env_int("DIFY_LIGHT_COMPACT_MAX_CHARS", 120_000)),
+    }
+
+
+def _attachment_count(materials: list[dict[str, Any]]) -> int:
+    return sum(len([item for item in material.get("attachments") or [] if isinstance(item, dict)]) for material in materials)
+
+
+def _dify_input_strategy(
+    *,
+    original_pack_chars: int,
+    primary_source: list[dict[str, Any]],
+    auxiliary_source: list[dict[str, Any]],
+) -> str:
+    thresholds = _dify_input_thresholds()
+    attachment_count = _attachment_count([*primary_source, *auxiliary_source])
+    if original_pack_chars > thresholds["light_compact"] or len(primary_source) >= 2:
+        return "staged_generation"
+    if original_pack_chars <= thresholds["full_input"]:
+        return "full_input"
+    return "light_compact"
+
+
+def _target_report_length_guidance(primary_source: list[dict[str, Any]], auxiliary_source: list[dict[str, Any]]) -> str:
+    primary_count = len(primary_source)
+    auxiliary_count = len(auxiliary_source)
+    if primary_count == 1 and auxiliary_count == 0:
+        material = primary_source[0]
+        if _material_content_text_length(material) < 800 and not material.get("attachments"):
+            return "800-1200字；正文短且无附件时完整覆盖事实，分析克制，不硬扩写。"
+        if _is_attachment_led_primary_material(material):
+            return "1500-2500字；正文短但附件为主时，按附件表格、产品/价格/操作步骤展开。"
+    if primary_count >= 2 or auxiliary_count >= 2:
+        return "3000-5000字；多主材料或2+n场景按主材料分段、辅助材料作背景，并允许更多表格。"
+    return "1800-3000字；按公告要点、规则、附件细节、企业影响和建议补齐。"
+
+
+def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "primary", preserve_detail: bool = False) -> dict[str, Any]:
     table_summaries: list[dict[str, Any]] = []
     if role == "auxiliary":
         table_limit = 2 if attachment.get("core_attachment") else 1
@@ -842,9 +897,15 @@ def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "pri
         table_key_column_limit = 20
         table_summary_limit = 500
         table_business_limit = 300
+    if preserve_detail:
+        table_limit = max(table_limit, len(list(attachment.get("table_summaries") or [])))
+        table_header_limit = 80
+        table_key_column_limit = 60
     for table in list(attachment.get("table_summaries") or [])[:table_limit]:
         if not isinstance(table, dict):
             continue
+        summary = str(table.get("summary") or "")
+        business_value = str(table.get("business_value") or "")
         table_summaries.append(
             {
                 "sheet_name": table.get("sheet_name") or "",
@@ -860,8 +921,8 @@ def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "pri
                 "contains_price": bool(table.get("contains_price")),
                 "contains_selected_status": bool(table.get("contains_selected_status")),
                 "contains_purchase_volume": bool(table.get("contains_purchase_volume")),
-                "summary": _limit_text(table.get("summary"), table_summary_limit),
-                "business_value": _limit_text(table.get("business_value"), table_business_limit),
+                "summary": summary if preserve_detail else _limit_text(summary, table_summary_limit),
+                "business_value": business_value if preserve_detail else _limit_text(business_value, table_business_limit),
             }
         )
     if role == "auxiliary":
@@ -874,6 +935,11 @@ def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "pri
         key_fact_limit = 18
         section_limit = 8
         section_chars = 360
+    if preserve_detail:
+        summary_limit = max(summary_limit, len(str(attachment.get("summary") or "")))
+        key_fact_limit = max(key_fact_limit, len(list(attachment.get("key_facts") or [])))
+        section_limit = max(section_limit, len(list(attachment.get("important_sections") or [])))
+        section_chars = 1200
     return {
         "articleattid": attachment.get("articleattid") or "",
         "filename": attachment.get("filename") or "",
@@ -886,9 +952,12 @@ def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "pri
         "download_status": attachment.get("download_status") or "",
         "cache_status": attachment.get("cache_status") or "",
         "text_length": attachment.get("text_length") or 0,
-        "summary": _limit_text(attachment.get("summary"), summary_limit),
+        "summary": str(attachment.get("summary") or "") if preserve_detail else _limit_text(attachment.get("summary"), summary_limit),
         "key_facts": list(attachment.get("key_facts") or [])[:key_fact_limit],
-        "important_sections": [_limit_text(item, section_chars) for item in list(attachment.get("important_sections") or [])[:section_limit]],
+        "important_sections": [
+            (item if preserve_detail else _limit_text(item, section_chars))
+            for item in list(attachment.get("important_sections") or [])[:section_limit]
+        ],
         "table_summaries": table_summaries,
     }
 
@@ -899,13 +968,20 @@ def _compact_material_for_dify(
     *,
     content_limit: int | None = None,
     attachment_limit: int | None = None,
+    preserve_detail: bool = False,
 ) -> dict[str, Any]:
     content_limit = content_limit if content_limit is not None else (5200 if role == "primary" else 1200)
     attachment_limit = attachment_limit if attachment_limit is not None else (8 if role == "primary" else 5)
+    if preserve_detail:
+        content_limit = max(content_limit, len(str(material.get("content_text") or "")))
+        attachment_limit = max(attachment_limit, len(list(material.get("attachments") or [])))
     attachments = sorted(
-        [item for item in list(material.get("attachments") or [])[:12] if isinstance(item, dict)],
+        [item for item in list(material.get("attachments") or [])[: (100 if preserve_detail else 12)] if isinstance(item, dict)],
         key=lambda item: (not bool(item.get("core_attachment")), int(item.get("sortnum") or 0), str(item.get("articleattid") or "")),
     )
+    summary_limit = max(500, len(str(material.get("summary") or ""))) if preserve_detail else 500
+    content_summary_limit = max(700, len(str(material.get("content_summary") or ""))) if preserve_detail else 700
+    key_fact_limit = max(16, len(list(material.get("key_facts") or []))) if preserve_detail else 16
     compact = {
         "material_role": material.get("material_role") or role,
         "evidence_source_type": "attachment_led_primary"
@@ -929,14 +1005,14 @@ def _compact_material_for_dify(
         "policytype": material.get("policytype") or "",
         "belongproject": material.get("belongproject") or "",
         "projectabbreviation": material.get("projectabbreviation") or "",
-        "summary": _limit_text(material.get("summary"), 500),
+        "summary": _limit_text(material.get("summary"), summary_limit),
         "content_text": str(material.get("content_text") or "")
         if len(str(material.get("content_text") or "")) <= content_limit
         else _limit_text(material.get("content_text"), content_limit),
         "content_text_length": material.get("content_text_length") or len(str(material.get("content_text") or "")),
-        "content_summary": _limit_text(material.get("content_summary"), 700),
-        "key_facts": list(material.get("key_facts") or [])[:16],
-        "attachments": [_compact_attachment_for_dify(item, role=role) for item in attachments[:attachment_limit]],
+        "content_summary": _limit_text(material.get("content_summary"), content_summary_limit),
+        "key_facts": list(material.get("key_facts") or [])[:key_fact_limit],
+        "attachments": [_compact_attachment_for_dify(item, role=role, preserve_detail=preserve_detail) for item in attachments[:attachment_limit]],
         "warnings": [_limit_text(item, 220) for item in list(material.get("warnings") or [])[:6]],
     }
     if role == "primary":
@@ -984,6 +1060,12 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
     original_pack_chars = len(json.dumps(pack, ensure_ascii=False, sort_keys=True))
     primary_source = [item for item in list(pack.get("primary_materials") or [])[:3] if isinstance(item, dict)]
     auxiliary_source = [item for item in list(pack.get("auxiliary_materials") or [])[:10] if isinstance(item, dict)]
+    input_strategy = _dify_input_strategy(
+        original_pack_chars=original_pack_chars,
+        primary_source=primary_source,
+        auxiliary_source=auxiliary_source,
+    )
+    preserve_detail = input_strategy == "full_input"
     primary_content_limit = _compact_primary_content_limit(primary_source, auxiliary_source, original_pack_chars, max_chars)
     primary = [
         _compact_material_for_dify(
@@ -991,13 +1073,17 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
             "primary",
             content_limit=primary_content_limit,
             attachment_limit=10 if len(primary_source) == 1 else 8,
+            preserve_detail=preserve_detail,
         )
         for item in primary_source
     ]
-    auxiliary = [_compact_material_for_dify(item, "auxiliary", content_limit=900, attachment_limit=4) for item in auxiliary_source]
-    omitted_content: list[dict[str, str]] = [
-        {"type": "attachment_full_text", "reason": "附件全文和 Excel 全量行数据不进入 Dify，仅保留摘要和结构化信息。"}
+    auxiliary = [
+        _compact_material_for_dify(item, "auxiliary", content_limit=900, attachment_limit=4, preserve_detail=preserve_detail)
+        for item in auxiliary_source
     ]
+    omitted_content: list[dict[str, str]] = []
+    if input_strategy != "full_input":
+        omitted_content.append({"type": "attachment_full_text", "reason": "附件全文和 Excel 全量行数据不进入 Dify，仅保留摘要和结构化信息。"})
     if any(len([item for item in list(material.get("attachments") or []) if isinstance(item, dict)]) > 5 for material in list(pack.get("auxiliary_materials") or []) if isinstance(material, dict)):
         omitted_content.append(
             {
@@ -1007,6 +1093,7 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         )
     compact: dict[str, Any] = {
         "pack_variant": "dify_compact",
+        "input_strategy": input_strategy,
         "pack_id": pack.get("pack_id") or "",
         "created_at": pack.get("created_at") or "",
         "pack_version": pack.get("pack_version") or "2.0",
@@ -1018,6 +1105,37 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         "warnings": [_limit_text(item, 260) for item in list(pack.get("warnings") or [])[:8]],
         "generation_guidance": copy.deepcopy(pack.get("generation_guidance") or {}),
     }
+    compact["generation_guidance"]["target_report_length"] = _target_report_length_guidance(primary_source, auxiliary_source)
+    compact["generation_guidance"]["mandatory_sections"] = [
+        "导语",
+        "公告要点",
+        "核心规则拆解表",
+        "时间节点/操作步骤",
+        "附件表格与产品价格细节",
+        "企业影响",
+        "风险提示",
+        "企业操作建议",
+    ]
+    if input_strategy == "full_input":
+        compact["generation_guidance"]["detail_policy"] = "small_input_no_compression"
+        compact["generation_guidance"]["generation_mode"] = "single_pass_full_evidence"
+        compact["generation_guidance"]["detail_instruction"] = (
+            "输入证据量较小，不要压缩正文、附件摘要、表格摘要、产品/价格字段或操作步骤；"
+            "报告篇幅应来自事实覆盖和证据支撑型分析，不得无依据扩写。"
+        )
+    elif input_strategy == "staged_generation":
+        compact["generation_guidance"]["detail_policy"] = "large_input_staged_compact"
+        compact["generation_guidance"]["generation_mode"] = "per_material_then_synthesis_staged_generation"
+        compact["generation_guidance"]["detail_instruction"] = (
+            "证据包较大或多主材料多附件，先分别梳理每个主材料和核心附件规则，再综合成报告；"
+            "辅助材料只作背景，不能覆盖主材料结论。"
+        )
+    else:
+        compact["generation_guidance"]["detail_policy"] = "medium_input_light_compact"
+        compact["generation_guidance"]["generation_mode"] = "single_pass_light_compact"
+        compact["generation_guidance"]["detail_instruction"] = (
+            "只清理重复模板和低价值噪声，保留核心规则、操作步骤、表格列名、产品范围和价格字段。"
+        )
     compact["generation_guidance"]["attachment_reporting_rule"] = (
         "附件未解析、仅元数据、下载失败、解析失败等材料完整性提示不得混入正式分析段落；"
         "材料完整性限制只写入 generation_warnings，不写入 report_markdown；"
@@ -1070,16 +1188,15 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         "warnings": [],
     }
     compact["dify_compacted"] = True
-    compact["compression_applied"] = original_pack_chars > max_chars
+    compact["compression_applied"] = input_strategy != "full_input" and original_pack_chars > max_chars
     compact["original_pack_chars"] = original_pack_chars
     compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
     compact["compression_strategy"] = [
-        "保留主材料正文和关键事实",
-        "核心附件保留摘要、关键事实和表格结构化摘要",
-        "辅助材料优先保留相关片段和可用要点",
-        "删除附件全文、Excel 全量行数据和低价值技术 warning",
-        "单主材料且未接近长度限制时优先保留更多主材料正文",
-        "多主材料时按篇均衡保留主材料正文，辅助材料优先压缩",
+        "小输入不压缩正文、附件摘要和附件表格摘要",
+        "中等输入只清理重复公告模板、免责声明和低价值技术 warning",
+        "大输入或复杂多材料先按材料保留核心规则，再综合生成",
+        "保留主材料正文、关键事实、核心附件摘要、表格列名、产品/价格字段和操作步骤",
+        "辅助材料优先保留相关片段和可用要点，不能反客为主",
     ]
     compact["omitted_content"] = omitted_content
     compact["dify_compaction_note"] = "Structured compact evidence pack for Dify variable-size limits. Use ?full=true for full evidence pack."
@@ -1114,7 +1231,7 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         compact["omitted_content"].append({"type": "secondary_evidence_blocks", "reason": "超过 Dify 变量长度限制，已移除重复的二级证据汇总块。"})
         break
     compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
-    compact["compression_applied"] = compact["compact_pack_chars"] < original_pack_chars
+    compact["compression_applied"] = False if input_strategy == "full_input" else compact["compact_pack_chars"] < original_pack_chars
     return compact
 
 
@@ -1180,7 +1297,11 @@ def _dify_config() -> dict[str, Any]:
     endpoint = (os.getenv("DIFY_REPORT_WORKFLOW_ENDPOINT") or "/workflows/run").strip()
     response_mode = (os.getenv("DIFY_RESPONSE_MODE") or "blocking").strip() or "blocking"
     user = (os.getenv("DIFY_USER") or "analysis_frontend").strip() or "analysis_frontend"
-    timeout_seconds = float((os.getenv("DIFY_TIMEOUT_SECONDS") or "600").strip() or "600")
+    timeout_seconds = _env_float("DIFY_TIMEOUT_SECONDS", 600.0)
+    max_attempts = max(1, _env_int("DIFY_WORKFLOW_MAX_ATTEMPTS", 3))
+    retry_backoff_seconds = max(0.0, _env_float("DIFY_WORKFLOW_RETRY_BACKOFF_SECONDS", 2.0))
+    staged_timeout_seconds = max(30.0, _env_float("DIFY_STAGED_TIMEOUT_SECONDS", 300.0))
+    staged_max_attempts = max(1, _env_int("DIFY_STAGED_MAX_ATTEMPTS", 1))
     if not base_url or not api_key:
         logger.warning("dify_configuration_incomplete base_url_configured=%s api_key_configured=%s", bool(base_url), bool(api_key))
         raise DifyWorkflowError("DIFY_NOT_CONFIGURED", "Dify API 配置不完整", status_code=500)
@@ -1191,11 +1312,106 @@ def _dify_config() -> dict[str, Any]:
         "response_mode": response_mode,
         "user": user,
         "timeout_seconds": timeout_seconds,
+        "max_attempts": max_attempts,
+        "retry_backoff_seconds": retry_backoff_seconds,
+        "staged_timeout_seconds": staged_timeout_seconds,
+        "staged_max_attempts": staged_max_attempts,
     }
 
 
 def _dify_workflow_url(config: dict[str, Any]) -> str:
     return f"{str(config['base_url']).rstrip('/')}/{str(config['endpoint']).lstrip('/')}"
+
+
+def _dify_input_strategy_from_pack(pack: dict[str, Any] | None) -> str:
+    if not isinstance(pack, dict):
+        return ""
+    guidance = pack.get("generation_guidance") if isinstance(pack.get("generation_guidance"), dict) else {}
+    strategy = str(pack.get("input_strategy") or guidance.get("input_strategy") or "").strip()
+    if strategy:
+        return strategy
+    primary_source = [item for item in pack.get("primary_materials") or [] if isinstance(item, dict)]
+    auxiliary_source = [item for item in pack.get("auxiliary_materials") or [] if isinstance(item, dict)]
+    evidence_chars = 0
+    for material in [*primary_source, *auxiliary_source]:
+        evidence_chars += _material_content_text_length(material)
+        evidence_chars += len(_clean_inline_text(material.get("summary")))
+        evidence_chars += _material_attachment_evidence_chars(material)
+        evidence_chars += sum(len(_clean_inline_text(value)) for value in material.get("price_rules") or [])
+        evidence_chars += sum(len(_clean_inline_text(value)) for value in material.get("time_requirements") or [])
+        evidence_chars += sum(len(_clean_inline_text(value)) for value in material.get("product_scope") or [])
+    return _dify_input_strategy(
+        original_pack_chars=evidence_chars,
+        primary_source=primary_source,
+        auxiliary_source=auxiliary_source,
+    )
+
+
+def _dify_request_policy(config: dict[str, Any], pack: dict[str, Any] | None = None) -> dict[str, Any]:
+    strategy = _dify_input_strategy_from_pack(pack)
+    timeout_seconds = float(config["timeout_seconds"])
+    max_attempts = int(config.get("max_attempts") or 1)
+    if strategy == "staged_generation":
+        timeout_seconds = min(timeout_seconds, float(config.get("staged_timeout_seconds") or timeout_seconds))
+        max_attempts = min(max_attempts, int(config.get("staged_max_attempts") or max_attempts))
+    return {
+        "input_strategy": strategy,
+        "timeout_seconds": max(1.0, timeout_seconds),
+        "max_attempts": max(1, max_attempts),
+        "retry_backoff_seconds": float(config.get("retry_backoff_seconds") or 0),
+    }
+
+
+def _post_dify_workflow_once(url: str, config: dict[str, Any], payload: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
+    with httpx.Client(timeout=timeout_seconds) as client:
+        response = client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {config['api_key']}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        parsed = response.json()
+        return parsed if isinstance(parsed, dict) else {}
+
+
+def _post_dify_workflow_with_wall_timeout(
+    url: str,
+    config: dict[str, Any],
+    payload: dict[str, Any],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    holder: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            holder["value"] = _post_dify_workflow_once(url, config, payload, timeout_seconds)
+        except BaseException as exc:  # noqa: BLE001
+            holder["exc"] = exc
+
+    worker = threading.Thread(target=target, name="dify-workflow-call", daemon=True)
+    worker.start()
+    worker.join(timeout_seconds)
+    if worker.is_alive():
+        raise httpx.TimeoutException(f"Dify workflow wall timeout after {timeout_seconds:.1f}s")
+    if "exc" in holder:
+        raise holder["exc"]
+    value = holder.get("value")
+    return value if isinstance(value, dict) else {}
+
+
+def _analysis_watchdog_timeout_seconds(pack: dict[str, Any] | None) -> float:
+    try:
+        policy = _dify_request_policy(_dify_config(), pack)
+    except DifyWorkflowError:
+        return 0.0
+    timeout_seconds = float(policy["timeout_seconds"])
+    watchdog_max_seconds = _env_float("DIFY_WATCHDOG_MAX_SECONDS", 300.0)
+    if watchdog_max_seconds > 0:
+        timeout_seconds = min(timeout_seconds, watchdog_max_seconds)
+    return max(1.0, timeout_seconds) + max(0.0, _env_float("DIFY_WATCHDOG_GRACE_SECONDS", 15.0))
 
 
 def _parse_json_object(value: Any) -> dict[str, Any] | None:
@@ -1258,6 +1474,8 @@ def _extract_dify_outputs(response_json: dict[str, Any]) -> tuple[str, dict[str,
     for candidate in candidates:
         if candidate and candidate.get("report_markdown"):
             return workflow_run_id, candidate, str(data.get("status") or "")
+    if str(data.get("status") or "").lower() in {"succeeded", "finished", ""}:
+        return workflow_run_id, output_dict, str(data.get("status") or "")
     raise DifyWorkflowError("DIFY_INVALID_RESPONSE", "Dify 返回内容缺少 report_markdown", "outputs did not contain report_markdown")
 
 
@@ -1308,6 +1526,8 @@ def _is_fragmentary_dify_report_markdown(markdown: Any, pack: dict[str, Any]) ->
     weighted_chars = int(diagnostics.get("weighted_evidence_chars") or diagnostics.get("total_content_chars") or 0)
     if weighted_chars < 1000:
         return False
+    if starts_midstream and not has_intro_or_first_section:
+        return True
     if len(text) < 700 and (starts_midstream or not has_report_structure):
         return True
     return False
@@ -1333,7 +1553,7 @@ def _fallback_report_from_pack(pack: dict[str, Any]) -> tuple[str, str, list[str
     lines: list[str] = [
         "## 导语",
         f"本报告基于已选择的主材料《{title or '未命名材料'}》整理。"
-        "由于本次自动生成结果未形成完整正文，以下内容按当前可读取材料进行保守梳理，供人工复核后使用。",
+        "以下内容按当前可读取材料进行保守梳理，重点呈现原文已披露的规则、执行要求和企业关注点。",
     ]
     meta_parts = []
     for label, field in [
@@ -1421,9 +1641,9 @@ def _fallback_report_from_pack(pack: dict[str, Any]) -> tuple[str, str, list[str
         [
             "",
             "## 五、初步分析提示",
-            "根据现有材料，该事项涉及医用耗材集采结果执行、医保支付标准衔接及相关主体执行安排。"
-            "企业需要重点核对产品是否属于通知覆盖范围、是否涉及未中选产品医保支付标准、执行时间和地方落地要求。"
-            "医疗机构和经办环节则需要关注采购结果执行、支付标准衔接和目录信息维护等事项。",
+            "根据现有材料，企业侧应先核对公告标题、正文规则、附件摘要和表格字段是否覆盖自身产品或业务。"
+            "若材料披露了执行时间、申报路径、产品范围、价格字段或机构责任，应据此形成内部核对清单；"
+            "若材料未披露相应事实，报告不补充推断性结论。"
         ]
     )
     if core_unavailable:
@@ -1459,8 +1679,101 @@ def _repair_unusable_dify_result(result: dict[str, Any], pack: dict[str, Any]) -
     return repaired
 
 
-def _call_dify_workflow(pack_id: str, run_id: str) -> dict[str, Any]:
+def _apply_local_quality_gate_to_dify_result(result: dict[str, Any], pack: dict[str, Any]) -> dict[str, Any]:
+    gated = dict(result)
+    diagnostics = build_run_diagnostics(gated, pack, _compact_evidence_pack_for_dify(pack))
+    quality_gate = diagnostics.get("quality_gate") if isinstance(diagnostics.get("quality_gate"), dict) else {}
+    gated["quality_gate"] = quality_gate
+    if quality_gate.get("deliverable_status") != "needs_manual_review":
+        return gated
+
+    issue = {
+        "issue_id": "Q_LOCAL_QUALITY_GATE",
+        "severity": "high",
+        "problem_type": "local_quality_gate",
+        "report_text": "",
+        "source_basis": "evidence_pack",
+        "fix_instruction": "本地质量门禁发现原文遵循、核心覆盖或分析深度问题，报告需人工复核后再交付。",
+        "quality_gate": quality_gate,
+    }
+    quality_check = gated.get("quality_check") if isinstance(gated.get("quality_check"), dict) else {"passed": None, "issues": []}
+    issues = list(quality_check.get("issues") or []) if isinstance(quality_check.get("issues"), list) else []
+    if not any(isinstance(item, dict) and item.get("issue_id") == issue["issue_id"] for item in issues):
+        issues.append(issue)
+    quality_check = dict(quality_check)
+    quality_check["passed"] = False
+    quality_check["issues"] = issues
+    remaining_issues = list(gated.get("remaining_issues") or [])
+    if not any(isinstance(item, dict) and item.get("issue_id") == issue["issue_id"] for item in remaining_issues):
+        remaining_issues.append(issue)
+    warnings = list(gated.get("warnings") or gated.get("generation_warnings") or [])
+    warning = "报告未通过原文遵循或分析深度门禁，已标记为需人工复核。"
+    if warning not in warnings:
+        warnings.append(warning)
+    gated.update(
+        {
+            "status": "needs_manual_review",
+            "quality_check": quality_check,
+            "remaining_issues": remaining_issues,
+            "warnings": warnings,
+            "generation_warnings": warnings,
+        }
+    )
+    return gated
+
+
+def _fallback_result_from_dify_error(
+    exc: DifyWorkflowError,
+    pack: dict[str, Any],
+    pack_id: str,
+    *,
+    apply_quality_gate: bool = True,
+) -> dict[str, Any]:
+    title, markdown, fallback_warnings = _fallback_report_from_pack(pack)
+    issue = {
+        "issue_id": "Q_DIFY_CALL_FAILED_FALLBACK",
+        "severity": "high",
+        "problem_type": exc.code,
+        "report_text": "",
+        "source_basis": "evidence_pack",
+        "fix_instruction": "Dify 调用失败后已基于 evidence_pack 生成保守报告；该报告需人工复核，不得直接交付。",
+        "error_detail": exc.detail,
+    }
+    warnings = [
+        *fallback_warnings,
+        f"{exc.message}，已启用保守兜底报告。",
+    ]
+    result = {
+        "workflow_run_id": "",
+        "status": "needs_manual_review",
+        "pack_id": pack_id,
+        "report_title": title,
+        "report_markdown": markdown,
+        "version": 1,
+        "quality_check": {"passed": False, "issues": [issue]},
+        "generation_warnings": warnings,
+        "warnings": warnings,
+        "remaining_issues": [issue],
+        "dify_error_code": exc.code,
+        "dify_error_message": exc.message,
+        "dify_error_detail": exc.detail,
+    }
+    if apply_quality_gate:
+        return _apply_local_quality_gate_to_dify_result(result, pack)
+    result["quality_gate"] = {
+        "deliverable_status": "needs_manual_review",
+        "blocking_issue_codes": ["DIFY_TIMEOUT"],
+        "summary_only_risk": False,
+        "source_fidelity_score": 0,
+        "analysis_depth_score": 0,
+        "evidence_backed_analysis_count": 0,
+    }
+    return result
+
+
+def _call_dify_workflow(pack_id: str, run_id: str, pack: dict[str, Any] | None = None) -> dict[str, Any]:
     config = _dify_config()
+    policy = _dify_request_policy(config, pack)
     url = _dify_workflow_url(config)
     payload = {
         "inputs": {"pack_id": pack_id},
@@ -1468,28 +1781,51 @@ def _call_dify_workflow(pack_id: str, run_id: str) -> dict[str, Any]:
         "user": config["user"],
     }
     started = time.perf_counter()
-    logger.info("dify_workflow_call_started run_id=%s pack_id=%s url=%s", run_id, pack_id, url)
-    try:
-        with httpx.Client(timeout=float(config["timeout_seconds"])) as client:
-            response = client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {config['api_key']}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            response_json = response.json()
-    except httpx.TimeoutException as exc:
-        raise DifyWorkflowError("DIFY_TIMEOUT", "Dify 工作流调用超时", str(exc), status_code=504) from exc
-    except httpx.HTTPStatusError as exc:
-        detail = f"HTTP {exc.response.status_code}: {_truncate(exc.response.text, 300)}"
-        raise DifyWorkflowError("DIFY_CALL_FAILED", "调用 Dify 工作流失败", detail) from exc
-    except httpx.HTTPError as exc:
-        raise DifyWorkflowError("DIFY_CALL_FAILED", "调用 Dify 工作流失败", str(exc)) from exc
-    except json.JSONDecodeError as exc:
-        raise DifyWorkflowError("DIFY_INVALID_RESPONSE", "Dify 返回内容不是合法 JSON", str(exc)) from exc
+    logger.info(
+        "dify_workflow_call_started run_id=%s pack_id=%s url=%s input_strategy=%s timeout_seconds=%s max_attempts=%s",
+        run_id,
+        pack_id,
+        url,
+        policy.get("input_strategy") or "",
+        policy["timeout_seconds"],
+        policy["max_attempts"],
+    )
+    attempts = int(policy["max_attempts"])
+    backoff = float(policy["retry_backoff_seconds"])
+    response_json: dict[str, Any] | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response_json = _post_dify_workflow_with_wall_timeout(url, config, payload, float(policy["timeout_seconds"]))
+            break
+        except httpx.TimeoutException as exc:
+            if attempt < attempts:
+                logger.warning("dify_workflow_retry_timeout run_id=%s pack_id=%s attempt=%s/%s", run_id, pack_id, attempt, attempts)
+                if backoff:
+                    time.sleep(backoff * attempt)
+                continue
+            raise DifyWorkflowError("DIFY_TIMEOUT", "Dify 工作流调用超时", str(exc), status_code=504) from exc
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            detail = f"HTTP {status}: {_truncate(exc.response.text, 300)}"
+            if status in {429, 502, 503, 504} and attempt < attempts:
+                logger.warning("dify_workflow_retry_status run_id=%s pack_id=%s status=%s attempt=%s/%s", run_id, pack_id, status, attempt, attempts)
+                if backoff:
+                    time.sleep(backoff * attempt)
+                continue
+            if status in {429, 503}:
+                raise DifyWorkflowError("DIFY_MODEL_BUSY", "Dify 上游模型服务繁忙", detail, status_code=502) from exc
+            raise DifyWorkflowError("DIFY_CALL_FAILED", "调用 Dify 工作流失败", detail) from exc
+        except httpx.HTTPError as exc:
+            if attempt < attempts:
+                logger.warning("dify_workflow_retry_http_error run_id=%s pack_id=%s attempt=%s/%s", run_id, pack_id, attempt, attempts)
+                if backoff:
+                    time.sleep(backoff * attempt)
+                continue
+            raise DifyWorkflowError("DIFY_CALL_FAILED", "调用 Dify 工作流失败", str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise DifyWorkflowError("DIFY_INVALID_RESPONSE", "Dify 返回内容不是合法 JSON", str(exc)) from exc
+    if response_json is None:
+        raise DifyWorkflowError("DIFY_CALL_FAILED", "调用 Dify 工作流失败", "empty response")
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     result = _normalize_dify_result(response_json, pack_id)
@@ -2283,6 +2619,92 @@ def cleanup_analysis_cache() -> dict[str, Any]:
     return {"success": True, **result}
 
 
+def _save_analysis_timeout_fallback_if_running(pack_id: str, run_id: str, pack: dict[str, Any] | None, timeout_seconds: float) -> None:
+    try:
+        current = _read_analysis_run(run_id)
+    except HTTPException as exc:
+        logger.warning("analysis_run_watchdog_missing run_id=%s pack_id=%s detail=%s", run_id, pack_id, exc.detail)
+        return
+    if current.get("status") != "running":
+        return
+    try:
+        evidence_pack = pack or _read_database_evidence_pack(pack_id)
+        exc = DifyWorkflowError(
+            "DIFY_TIMEOUT",
+            "Dify 工作流调用超时",
+            f"watchdog timeout after {timeout_seconds:.1f}s",
+            status_code=504,
+        )
+        fallback = _fallback_result_from_dify_error(exc, evidence_pack, pack_id, apply_quality_gate=False)
+        warnings = [
+            *list(current.get("warnings") or []),
+            "Dify 工作流超过本地等待上限，系统已生成保守降级报告，需人工复核。",
+            *list(fallback.get("warnings") or fallback.get("generation_warnings") or []),
+        ]
+        current.update(fallback)
+        current.update(
+            {
+                "success": True,
+                "status": "needs_manual_review",
+                "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+                "error_message": "Dify 工作流调用超时：证据包较大或生成/质检耗时过长",
+                "error_detail": exc.detail,
+                "warnings": warnings,
+                "generation_warnings": warnings,
+            }
+        )
+        _write_analysis_run(current)
+        logger.warning(
+            "analysis_run_watchdog_timeout_fallback_saved run_id=%s pack_id=%s timeout_seconds=%s",
+            run_id,
+            pack_id,
+            timeout_seconds,
+        )
+    except Exception as fallback_exc:  # noqa: BLE001
+        logger.warning(
+            "analysis_run_watchdog_fallback_failed run_id=%s pack_id=%s error_type=%s",
+            run_id,
+            pack_id,
+            fallback_exc.__class__.__name__,
+        )
+
+
+def _parse_analysis_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _maybe_finalize_timed_out_analysis_run(record: dict[str, Any]) -> dict[str, Any]:
+    if record.get("status") != "running":
+        return record
+    run_id = str(record.get("run_id") or "")
+    pack_id = str(record.get("pack_id") or "")
+    if not run_id or not pack_id:
+        return record
+    created_at = _parse_analysis_timestamp(record.get("created_at"))
+    if not created_at:
+        return record
+    try:
+        pack = _read_database_evidence_pack(pack_id)
+    except HTTPException as exc:
+        logger.warning("analysis_run_timeout_check_pack_missing run_id=%s pack_id=%s detail=%s", run_id, pack_id, exc.detail)
+        return record
+    timeout_seconds = _analysis_watchdog_timeout_seconds(pack)
+    if timeout_seconds <= 0:
+        return record
+    if (datetime.now() - created_at).total_seconds() < timeout_seconds:
+        return record
+    _save_analysis_timeout_fallback_if_running(pack_id, run_id, pack, timeout_seconds)
+    try:
+        return _read_analysis_run(run_id)
+    except HTTPException:
+        return record
+
+
 def _execute_analysis_run_background(pack_id: str, run_id: str) -> None:
     try:
         record = _read_analysis_run(run_id)
@@ -2291,11 +2713,23 @@ def _execute_analysis_run_background(pack_id: str, run_id: str) -> None:
         return
 
     logger.info("analysis_run_background_started run_id=%s pack_id=%s", run_id, pack_id)
+    pack_for_policy: dict[str, Any] | None = None
     try:
-        result = _call_dify_workflow(pack_id, run_id)
+        pack_for_policy = _read_database_evidence_pack(pack_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("analysis_run_pack_preread_failed run_id=%s pack_id=%s error_type=%s", run_id, pack_id, exc.__class__.__name__)
+    watchdog: threading.Timer | None = None
+    watchdog_timeout = _analysis_watchdog_timeout_seconds(pack_for_policy)
+    if watchdog_timeout > 0:
+        watchdog = threading.Timer(watchdog_timeout, _save_analysis_timeout_fallback_if_running, args=(pack_id, run_id, pack_for_policy, watchdog_timeout))
+        watchdog.daemon = True
+        watchdog.start()
+    try:
+        result = _call_dify_workflow(pack_id, run_id, pack_for_policy)
         try:
-            pack = _read_database_evidence_pack(pack_id)
+            pack = pack_for_policy or _read_database_evidence_pack(pack_id)
             result = _repair_unusable_dify_result(result, pack)
+            result = _apply_local_quality_gate_to_dify_result(result, pack)
         except Exception as repair_exc:  # noqa: BLE001
             logger.warning(
                 "analysis_run_repair_skipped run_id=%s pack_id=%s error_type=%s",
@@ -2309,6 +2743,39 @@ def _execute_analysis_run_background(pack_id: str, run_id: str) -> None:
         if exc.code == "DIFY_TIMEOUT":
             error_message = "Dify 工作流调用超时：证据包较大或生成/质检耗时过长"
             warnings.append("证据包较大时可能导致 Dify 超时，可减少辅助材料、缩短辅助附件摘要或稍后重试。")
+        try:
+            pack = pack_for_policy or _read_database_evidence_pack(pack_id)
+            fallback = _fallback_result_from_dify_error(exc, pack, pack_id)
+            merged_warnings = [*warnings, *list(fallback.get("warnings") or fallback.get("generation_warnings") or [])]
+            record.update(fallback)
+            record.update(
+                {
+                    "success": True,
+                    "status": "needs_manual_review",
+                    "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+                    "error_message": error_message,
+                    "error_detail": exc.detail,
+                    "warnings": merged_warnings,
+                    "generation_warnings": merged_warnings,
+                }
+            )
+            _write_analysis_run(record)
+            logger.warning(
+                "analysis_run_dify_failed_fallback_saved run_id=%s pack_id=%s code=%s detail=%s",
+                run_id,
+                pack_id,
+                exc.code,
+                _truncate(exc.detail, 200),
+            )
+            return
+        except Exception as fallback_exc:  # noqa: BLE001
+            logger.warning(
+                "analysis_run_dify_fallback_failed run_id=%s pack_id=%s code=%s fallback_error_type=%s",
+                run_id,
+                pack_id,
+                exc.code,
+                fallback_exc.__class__.__name__,
+            )
         record.update(
             {
                 "success": False,
@@ -2335,7 +2802,22 @@ def _execute_analysis_run_background(pack_id: str, run_id: str) -> None:
         _write_analysis_run(record)
         logger.exception("analysis_run_unexpected_failed run_id=%s pack_id=%s", run_id, pack_id)
         return
+    finally:
+        if watchdog:
+            watchdog.cancel()
 
+    try:
+        current_record = _read_analysis_run(run_id)
+        if current_record.get("status") != "running":
+            logger.warning(
+                "analysis_run_late_dify_result_ignored run_id=%s pack_id=%s current_status=%s",
+                run_id,
+                pack_id,
+                current_record.get("status") or "",
+            )
+            return
+    except HTTPException:
+        pass
     record.update(result)
     record["success"] = True
     record["updated_at"] = datetime.now().isoformat(sep=" ", timespec="seconds")
@@ -2403,6 +2885,7 @@ def get_analysis_run(run_id: str) -> dict[str, Any]:
         if exc.status_code == 404:
             return _analysis_error(404, "RUN_NOT_FOUND", "analysis run 不存在", str(exc.detail))
         return _analysis_error(exc.status_code, "RUN_READ_FAILED", "读取 analysis run 失败", str(exc.detail))
+    record = _maybe_finalize_timed_out_analysis_run(record)
     summary = dict(record)
     summary.pop("report_markdown", None)
     summary["quality_passed"] = (record.get("quality_check") or {}).get("passed") if isinstance(record.get("quality_check"), dict) else None
@@ -2418,6 +2901,7 @@ def get_analysis_run_diagnostics(run_id: str) -> dict[str, Any]:
         if exc.status_code == 404:
             return _analysis_error(404, "RUN_NOT_FOUND", "analysis run 不存在", str(exc.detail))
         return _analysis_error(exc.status_code, "RUN_READ_FAILED", "读取 analysis run 失败", str(exc.detail))
+    record = _maybe_finalize_timed_out_analysis_run(record)
 
     pack: dict[str, Any] | None = None
     pack_id = str(record.get("pack_id") or "")
@@ -2444,6 +2928,7 @@ def get_analysis_run_report(run_id: str) -> AnalysisRunReportResponse | JSONResp
         if exc.status_code == 404:
             return _analysis_error(404, "RUN_NOT_FOUND", "analysis run 不存在", str(exc.detail))
         return _analysis_error(exc.status_code, "RUN_READ_FAILED", "读取 analysis run 失败", str(exc.detail))
+    record = _maybe_finalize_timed_out_analysis_run(record)
     if not record.get("report_markdown"):
         return _analysis_error(409, "REPORT_NOT_READY", "报告尚未生成完成")
     return AnalysisRunReportResponse(
@@ -2453,6 +2938,7 @@ def get_analysis_run_report(run_id: str) -> AnalysisRunReportResponse | JSONResp
         report_title=str(record.get("report_title") or ""),
         report_markdown=_clean_model_output(str(record.get("report_markdown") or "")),
         quality_check=record.get("quality_check") if isinstance(record.get("quality_check"), dict) else {"passed": None, "issues": []},
+        quality_gate=record.get("quality_gate") if isinstance(record.get("quality_gate"), dict) else {},
         version=int(record.get("version") or 1),
         warnings=list(record.get("warnings") or record.get("generation_warnings") or []),
         remaining_issues=list(record.get("remaining_issues") or []),
@@ -2567,10 +3053,15 @@ def download_analysis_run_report(run_id: str):
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     _cleanup_old_reports(REPORT_DIR)
     title = str(record.get("report_title") or "分析报告").strip() or "分析报告"
-    filename = _unique_report_filename(f"{_safe_filename(title)}.docx", REPORT_DIR)
+    version = str(record.get("version") or 1)
+    report_hash = hashlib.sha256(report_markdown.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    filename = f"{_safe_filename(title)}_{_safe_filename(run_id)}_v{_safe_filename(version)}_{report_hash}.docx"
     path = REPORT_DIR / filename
-    _markdown_to_docx(report_markdown, path, title)
-    logger.info("analysis_run_report_download_created run_id=%s filename=%s", run_id, filename)
+    if not path.exists():
+        _markdown_to_docx(report_markdown, path, title)
+        logger.info("analysis_run_report_download_created run_id=%s filename=%s", run_id, filename)
+    else:
+        logger.info("analysis_run_report_download_cache_hit run_id=%s filename=%s", run_id, filename)
     return FileResponse(
         path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
