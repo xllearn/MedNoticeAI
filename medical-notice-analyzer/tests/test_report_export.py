@@ -295,19 +295,19 @@ class ReportV2GateTests(unittest.TestCase):
 
 
 class WorkflowYamlV2Tests(unittest.TestCase):
-    def test_workflow_yaml_is_parseable_and_conservative_for_old_dify(self) -> None:
-        workflow_path = Path(__file__).resolve().parents[1] / "workflow-v2-medical-notice-report.yml"
+    def test_latest_pack_id_workflow_yaml_is_parseable(self) -> None:
+        workflow_path = Path(__file__).resolve().parents[1] / "dify_workflow_pack_id_human_style.yml"
 
         data = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
         node_ids = {node["id"] for node in data["workflow"]["graph"]["nodes"]}
 
-        self.assertEqual(data["version"], "0.1.5")
         self.assertEqual(data["app"]["mode"], "workflow")
-        self.assertIn("parse_analyze_node", node_ids)
-        self.assertNotIn("fetch_success_gate", node_ids)
-        self.assertNotIn("qa_status_gate", node_ids)
-        self.assertNotIn("qa_second_status_gate", node_ids)
-        self.assertNotIn("build_export_payload_initial_node", node_ids)
+        self.assertEqual(data["app"]["name"], "医药公告采购分析报告_pack_id_人工风格")
+        self.assertIn("start_node", node_ids)
+        self.assertIn("fetch_evidence_pack", node_ids)
+        self.assertIn("generate_report", node_ids)
+        self.assertIn("qa_report_first", node_ids)
+        self.assertIn("revise_report", node_ids)
 
 
 if __name__ == "__main__":

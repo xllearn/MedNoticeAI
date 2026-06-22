@@ -12,7 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_dify_chatflow_dsl.py"
 IMPORTER = ROOT / "scripts" / "import_dify_chatflow.ps1"
 README = ROOT / "README.md"
-HANDOFF = ROOT / "NEXT_CHAT_HANDOFF.md"
 
 
 def load_builder_module():
@@ -187,12 +186,10 @@ class DifyChatflowImporterTests(unittest.TestCase):
         self.assertIn('DifyApp.mode == "advanced-chat"', text)
         self.assertIn("workflow_id = workflow.id", text)
 
-    def test_docs_show_chatflow_import_command(self) -> None:
-        docs = README.read_text(encoding="utf-8") + "\n" + HANDOFF.read_text(encoding="utf-8")
+    def test_readme_points_to_retained_dify_workflow(self) -> None:
+        docs = README.read_text(encoding="utf-8")
 
-        self.assertIn("scripts\\import_dify_chatflow.ps1", docs)
-        self.assertIn("scripts\\build_dify_chatflow_dsl.py", docs)
-        self.assertIn("advanced-chat", docs)
+        self.assertIn("dify_workflow_pack_id_human_style.yml", docs)
 
     def test_history_parser_removes_thinking_and_falls_back_to_document_insights(self) -> None:
         builder = load_builder_module()

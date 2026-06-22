@@ -163,7 +163,7 @@ http://host.docker.internal:8099/analyze
 
 ## 新版 Chatflow 主流程
 
-新版主流程建议使用 `dify-chatflow-medical-notice-report.yml` 搭建 Dify advanced-chat 应用。
+当前保留的 Dify 配置为 `dify_workflow_pack_id_human_style.yml`，用于 pack_id 证据包分析工作流。
 
 - 首轮必须输入公告 URL。
 - 可选上传关联项目 Word，系统只将其提炼为串联分析参考，不作为本次公告事实来源。
@@ -233,19 +233,7 @@ The prompt intentionally avoids a fixed five-part structure. Reports should foll
 
 ## Chatflow Enhancements
 
-The recommended production entry is now a Dify Chatflow. The old `dify-workflow-medical-notice-report.yml` is kept as a backup, while `dify-chatflow-medical-notice-report.yml` describes the new conversation-oriented flow.
-
-Create or update the local Dify advanced-chat app with:
-
-```powershell
-.\scripts\import_dify_chatflow.ps1
-```
-
-The script builds an importable DSL with `scripts\build_dify_chatflow_dsl.py`, imports it through Dify's `AppDslService`, publishes the draft workflow, and prints the app URL. To only inspect the generated DSL:
-
-```powershell
-py -3 .\scripts\build_dify_chatflow_dsl.py --stdout
-```
+The retained Dify DSL is `dify_workflow_pack_id_human_style.yml`. It is the current pack_id workflow used for evidence-pack based report generation.
 
 Recommended Dify variables:
 
