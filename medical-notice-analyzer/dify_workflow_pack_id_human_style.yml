@@ -478,6 +478,10 @@ workflow:
 
 
             写作目标：生成接近人工报告的医药公告采购分析稿，而不是简单摘要。人工报告通常具备短标题、导语、主题化规则拆解、必要 Markdown 表格、企业关注点和清晰的企业执行影响。
+            必须遵守 evidence_pack.generation_guidance 中的 input_strategy、target_report_length、detail_policy、generation_mode、mandatory_sections 和 detail_instruction。
+            如果 input_strategy=full_input，说明输入证据量较小，不要主动压缩正文、附件摘要、附件表格摘要、产品/价格字段或操作步骤；报告篇幅应来自事实覆盖和证据支撑型分析。
+            如果 input_strategy=light_compact，只能压缩重复模板和低价值噪声，仍要保留核心规则、操作步骤、表格列名、产品范围和价格字段。
+            如果 input_strategy=staged_generation，需要先按每个主材料和核心附件拆解，再综合成最终报告；辅助材料只作背景，不能覆盖主材料结论。
 
 
             证据使用规则：
@@ -509,11 +513,13 @@ workflow:
 
             5. 如果证据只给出类别清单，只能生成“序号/类别”或“类别”表，不得自行增加“涵盖内容”“影响分析”“适用产品”等列。
 
-            6. 每个重点段落采用：分析观点 + 材料依据 + 影响说明。分析观点必须克制，使用“可能”“有助于”“意味着”“需要关注”等表达。
+            6. 每个重点段落采用：分析观点 + 材料依据 + 影响说明。分析观点必须克制，使用“可能”“有助于”“意味着”“需要关注”等表达。分析观点必须能回扣 evidence_pack 中的原文、附件摘要、key_facts、important_sections 或 table_summaries；不能使用常识、行业经验或外部信息补足证据。
 
-            7. 企业关注点必须基于主材料规则和已解析附件摘要，不能泛泛而谈。
+            7. 企业关注点必须基于主材料规则和已解析附件摘要，不能泛泛而谈。报告必须至少包含一处“影响分析/风险提示/企业建议/企业关注点”类分析内容；但每条分析都要写清对应材料依据，不能只写摘要，也不能脱离原文自由发挥。
+            8. 附件中有 table_summaries 时，必须在正文中描述表格用途、关键列、适用产品/企业、价格或申报字段；涉及系统操作时，必须写清操作路径、申报/维护/核验动作、截止时间和主体责任。
 
-            8. 不要在 report_markdown 中生成额外材料说明、声明、资料限制小节或系统限制提示。材料完整性限制只写入 generation_warnings，由前端诊断区和 Word 导出模板处理。
+            9. 不要在 report_markdown 中生成额外材料说明、声明、资料限制小节或系统限制提示。材料完整性限制只写入 generation_warnings，由前端诊断区和 Word 导出模板处理。
+            10. 字数控制必须证据驱动：短正文无附件可以较短但要完整覆盖事实；短正文但附件为主时必须根据附件内容展开；普通 1+0/1+n 应覆盖规则、附件和企业影响；复杂 2+n 应按主材料分段并允许更多表格。不得为了凑字数写 evidence_pack 不支持的结论。
 
 
             标注规则：
@@ -687,7 +693,7 @@ workflow:
             \ evidence_pack 中没有依据的事实。\n2. 日期、数字、价格、主体名称、项目阶段、适用范围是否错误。\n3. 是否混淆主材料和辅助材料，辅助材料是否反客为主。\n4. 是否把 metadata_only、network_unreachable、download_failed、unsupported、parse_failed\
             \ 附件当作已读取全文。\n5. 是否遗漏主材料核心规则，包括范围对象、挂网/申报规则、价格规则、执行时间、企业要求、医疗机构/平台要求、暂停/撤销/信用风险。\n6. 是否遗漏附件表格摘要中的关键字段，例如企业、产品、注册证号、医保编码、价格、中选状态、采购量。\n\
             7. 是否把附件未解析、仅元数据、下载失败等材料完整性提示、声明或资料说明写入 report_markdown；这类内容只能进入 generation_warnings、warnings 或诊断中。\n8. 是否缺少必要 Markdown 表格；如果证据存在明显规则清单、状态表、价格/产品/中选结果结构信息而报告完全不用表格，应列为\
-            \ major。\n9. 是否存在过度推断、绝对化表述或营销化语言。\n10. report_markdown 是否混入 JSON、调试信息、提示词或模型思考过程。\n11. 红色/蓝色/黄色标注是否基于 evidence_pack，是否改变事实含义。\n\
+            \ major。\n9. 是否只有摘要、缺少影响分析、风险提示、企业建议或企业关注点；若缺少有原文支撑的分析内容，应列为 major，problem_type 使用 summary_only。\n10. 是否存在分析判断但不能从 evidence_pack 原文、附件摘要、key_facts、important_sections 或 table_summaries 推出；此类问题应列为 unsupported_claim 或 over_inference。\n11. 是否存在过度推断、绝对化表述或营销化语言。\n12. report_markdown 是否混入 JSON、调试信息、提示词或模型思考过程。\n13. 红色/蓝色/黄色标注是否基于 evidence_pack，是否改变事实含义。\n\
             \nseverity 只能使用 fatal、high、major、minor。只有 fatal/high/major 需要自动修订，minor 不触发自动修订。\n\nevidence_pack:\n{{#parse_evidence_pack.evidence_pack_json#}}\n\
             \ngeneration_warnings:\n{{#parse_generation_json.generation_warnings_json#}}\n\nreport_markdown:\n{{#parse_generation_json.report_markdown#}}\n\
             \n返回 JSON：\n{\n  \"passed\": false,\n  \"round\": 1,\n  \"issues\": [\n    {\n      \"issue_id\": \"Q001\",\n\
@@ -1025,7 +1031,7 @@ workflow:
             \ evidence_pack 中没有依据的事实。\n2. 日期、数字、价格、主体名称、项目阶段、适用范围是否错误。\n3. 是否混淆主材料和辅助材料，辅助材料是否反客为主。\n4. 是否把 metadata_only、network_unreachable、download_failed、unsupported、parse_failed\
             \ 附件当作已读取全文。\n5. 是否遗漏主材料核心规则，包括范围对象、挂网/申报规则、价格规则、执行时间、企业要求、医疗机构/平台要求、暂停/撤销/信用风险。\n6. 是否遗漏附件表格摘要中的关键字段，例如企业、产品、注册证号、医保编码、价格、中选状态、采购量。\n\
             7. 是否把附件未解析、仅元数据、下载失败等材料完整性提示、声明或资料说明写入 report_markdown；这类内容只能进入 generation_warnings、warnings 或诊断中。\n8. 是否缺少必要 Markdown 表格；如果证据存在明显规则清单、状态表、价格/产品/中选结果结构信息而报告完全不用表格，应列为\
-            \ major。\n9. 是否存在过度推断、绝对化表述或营销化语言。\n10. report_markdown 是否混入 JSON、调试信息、提示词或模型思考过程。\n11. 红色/蓝色/黄色标注是否基于 evidence_pack，是否改变事实含义。\n\
+            \ major。\n9. 是否只有摘要、缺少影响分析、风险提示、企业建议或企业关注点；若缺少有原文支撑的分析内容，应列为 major，problem_type 使用 summary_only。\n10. 是否存在分析判断但不能从 evidence_pack 原文、附件摘要、key_facts、important_sections 或 table_summaries 推出；此类问题应列为 unsupported_claim 或 over_inference。\n11. 是否存在过度推断、绝对化表述或营销化语言。\n12. report_markdown 是否混入 JSON、调试信息、提示词或模型思考过程。\n13. 红色/蓝色/黄色标注是否基于 evidence_pack，是否改变事实含义。\n\
             \nseverity 只能使用 fatal、high、major、minor。只有 fatal/high/major 需要自动修订，minor 不触发自动修订。\n\nevidence_pack:\n{{#parse_evidence_pack.evidence_pack_json#}}\n\
             \ngeneration_warnings:\n{{#parse_generation_json.generation_warnings_json#}}\n\nreport_markdown:\n{{#parse_revision_json.report_markdown#}}\n\
             \n返回 JSON：\n{\n  \"passed\": false,\n  \"round\": 2,\n  \"issues\": [\n    {\n      \"issue_id\": \"Q001\",\n\

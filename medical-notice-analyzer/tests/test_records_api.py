@@ -925,6 +925,117 @@ class RecordsApiTests(unittest.TestCase):
         self.assertNotIn("primary_content_tail", {item["type"] for item in compact["omitted_content"]})
         self.assertLess(compact["compact_pack_chars"], 65000)
 
+    def test_dify_input_uses_full_detail_for_small_pack(self) -> None:
+        long_summary = "Attachment table describes enterprise product selected price operation path. " * 70
+        long_table_summary = "Rows include enterprise name product name registration certificate selected price. " * 45
+        pack = {
+            "pack_id": "pack_small_full_input",
+            "created_at": "2026-06-17 12:00:00",
+            "primary_materials": [
+                {
+                    "material_role": "primary",
+                    "menu_code": "m1",
+                    "articleid": "a1",
+                    "title": "Small notice with rich attachment",
+                    "content_text": "Short body says deadline is 2026-07-01 and details are in attachment.",
+                    "content_text_length": 68,
+                    "attachments": [
+                        {
+                            "articleattid": "att1",
+                            "filename": "result-table.xlsx",
+                            "core_attachment": True,
+                            "business_type": "selected result",
+                            "parse_status": "parsed_table_summary",
+                            "summary": long_summary,
+                            "key_facts": ["deadline 2026-07-01", "attachment contains operation path"],
+                            "important_sections": ["operation path: login, maintain product, submit review"],
+                            "table_summaries": [
+                                {
+                                    "sheet_name": "result",
+                                    "rows": 500,
+                                    "columns_count": 9,
+                                    "headers": ["enterprise", "product", "registration_cert", "selected_price", "operation"],
+                                    "key_columns": ["enterprise", "product", "selected_price", "operation"],
+                                    "summary": long_table_summary,
+                                    "business_value": "Supports product, price and operation-step reporting.",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+            "generation_guidance": {},
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+        attachment = compact["primary_materials"][0]["attachments"][0]
+        table = attachment["table_summaries"][0]
+
+        self.assertEqual(compact["input_strategy"], "full_input")
+        self.assertFalse(compact["compression_applied"])
+        self.assertEqual(attachment["summary"], long_summary)
+        self.assertEqual(table["summary"], long_table_summary)
+        self.assertEqual(compact["generation_guidance"]["detail_policy"], "small_input_no_compression")
+        self.assertIn("1500-2500", compact["generation_guidance"]["target_report_length"])
+        diagnostics = build_pack_diagnostics(pack, compact)
+        self.assertEqual(diagnostics["input_strategy"], "full_input")
+
+    def test_dify_input_marks_large_multi_material_pack_for_staged_generation(self) -> None:
+        attachments = [
+            {
+                "articleattid": f"att{i}",
+                "filename": f"table-{i}.xlsx",
+                "core_attachment": True,
+                "parse_status": "parsed_table_summary",
+                "summary": "enterprise product price rule " * 450,
+                "table_summaries": [
+                    {
+                        "sheet_name": "result",
+                        "rows": 1000,
+                        "columns_count": 12,
+                        "headers": ["enterprise", "product", "price", "province", "deadline"],
+                        "key_columns": ["enterprise", "product", "price", "deadline"],
+                        "summary": "selected product price and deadline table " * 180,
+                        "business_value": "large table",
+                    }
+                ],
+            }
+            for i in range(6)
+        ]
+        pack = {
+            "pack_id": "pack_large_staged",
+            "primary_materials": [
+                {"menu_code": "m", "articleid": "p1", "title": "Primary 1", "content_text": "primary one " * 9000, "attachments": attachments[:3]},
+                {"menu_code": "m", "articleid": "p2", "title": "Primary 2", "content_text": "primary two " * 9000, "attachments": attachments[3:]},
+            ],
+            "auxiliary_materials": [],
+            "generation_guidance": {},
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+
+        self.assertEqual(compact["input_strategy"], "staged_generation")
+        self.assertTrue(compact["compression_applied"])
+        self.assertLess(compact["compact_pack_chars"], 65000)
+        self.assertIn("per_material_then_synthesis", compact["generation_guidance"]["generation_mode"])
+        self.assertIn("3000-5000", compact["generation_guidance"]["target_report_length"])
+
+    def test_dify_input_marks_two_primary_pack_for_staged_generation(self) -> None:
+        pack = {
+            "pack_id": "pack_two_primary_staged",
+            "primary_materials": [
+                {"menu_code": "m", "articleid": "p1", "title": "Primary 1", "content_text": "primary one " * 4000, "attachments": []},
+                {"menu_code": "m", "articleid": "p2", "title": "Primary 2", "content_text": "primary two " * 4000, "attachments": []},
+            ],
+            "auxiliary_materials": [],
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+
+        self.assertEqual(compact["input_strategy"], "staged_generation")
+        self.assertEqual(main_module._dify_input_strategy_from_pack(pack), "staged_generation")
+
     def test_pack_diagnostics_marks_short_body_with_rich_core_attachment_as_attachment_led(self) -> None:
         pack = {
             "pack_id": "pack_attachment_led",
@@ -1197,6 +1308,131 @@ class RecordsApiTests(unittest.TestCase):
         self.assertIn("附件表格摘要", missing_labels)
         self.assertIn("REPORT_MISSING_CORE_COVERAGE", {item["code"] for item in diagnostics["diagnosis"]})
 
+    def test_run_diagnostics_reports_source_fidelity_and_blocks_unsupported_facts(self) -> None:
+        pack = {
+            "primary_materials": [
+                {
+                    "title": "天津市执行医用耗材集采结果的通知",
+                    "content_text": "天津市医保局明确自2026年6月1日起执行医用耗材集采结果，企业需关注产品范围和执行时间。",
+                    "summary": "天津市执行医用耗材集采结果。",
+                    "attachments": [],
+                }
+            ],
+            "auxiliary_materials": [],
+        }
+        record = {
+            "status": "finished",
+            "report_title": "天津市执行医用耗材集采结果分析",
+            "report_markdown": (
+                "## 导语\n天津市医保局明确自2026年7月1日起执行医用耗材集采结果。\n\n"
+                "## 企业影响分析\n企业需要关注产品范围和执行时间。"
+            ),
+            "quality_check": {"passed": True, "issues": []},
+            "generation_warnings": [],
+            "remaining_issues": [],
+            "version": 1,
+        }
+
+        diagnostics = build_run_diagnostics(record, pack, main_module._compact_evidence_pack_for_dify(pack))
+
+        gate = diagnostics["quality_gate"]
+        self.assertEqual(gate["deliverable_status"], "needs_manual_review")
+        self.assertLess(gate["source_fidelity_score"], 100)
+        self.assertGreaterEqual(gate["unsupported_fact_count"], 1)
+        self.assertIn("UNSUPPORTED_FACT", {item["code"] for item in gate["blocking_issues"]})
+
+    def test_run_diagnostics_detects_summary_only_report(self) -> None:
+        pack = {
+            "primary_materials": [
+                {
+                    "title": "河南调整医用耗材申报挂网操作流程的通知",
+                    "content_text": "河南省调整医用耗材申报挂网操作流程，企业通过联审通办提交申报。",
+                    "summary": "调整申报挂网操作流程。",
+                    "attachments": [],
+                }
+            ],
+            "auxiliary_materials": [],
+        }
+        record = {
+            "status": "finished",
+            "report_title": "河南调整医用耗材申报挂网操作流程分析",
+            "report_markdown": "河南省调整医用耗材申报挂网操作流程，企业通过联审通办提交申报。",
+            "quality_check": {"passed": True, "issues": []},
+            "generation_warnings": [],
+            "remaining_issues": [],
+            "version": 1,
+        }
+
+        diagnostics = build_run_diagnostics(record, pack, main_module._compact_evidence_pack_for_dify(pack))
+
+        gate = diagnostics["quality_gate"]
+        self.assertTrue(gate["summary_only_risk"])
+        self.assertLess(gate["analysis_depth_score"], 50)
+        self.assertEqual(gate["deliverable_status"], "needs_manual_review")
+        self.assertIn("SUMMARY_ONLY_REPORT", {item["code"] for item in gate["blocking_issues"]})
+
+    def test_run_diagnostics_counts_evidence_backed_analysis(self) -> None:
+        pack = {
+            "primary_materials": [
+                {
+                    "title": "天津市执行医用耗材集采结果的通知",
+                    "content_text": "天津市医保局明确自2026年6月1日起执行医用耗材集采结果，企业需关注产品范围和执行时间。",
+                    "summary": "天津市执行医用耗材集采结果。",
+                    "attachments": [],
+                }
+            ],
+            "auxiliary_materials": [],
+        }
+        record = {
+            "status": "finished",
+            "report_title": "天津市执行医用耗材集采结果分析",
+            "report_markdown": (
+                "## 导语\n天津市医保局明确自2026年6月1日起执行医用耗材集采结果。\n\n"
+                "## 影响分析\n该通知对企业的主要影响在于需要围绕产品范围和执行时间调整供货安排。\n\n"
+                "## 风险提示\n若企业未及时核对医用耗材集采结果，可能影响执行衔接。\n\n"
+                "## 企业建议\n建议企业按通知要求核对天津市执行范围和时间节点。"
+            ),
+            "quality_check": {"passed": True, "issues": []},
+            "generation_warnings": [],
+            "remaining_issues": [],
+            "version": 1,
+        }
+
+        diagnostics = build_run_diagnostics(record, pack, main_module._compact_evidence_pack_for_dify(pack))
+
+        gate = diagnostics["quality_gate"]
+        self.assertFalse(gate["summary_only_risk"])
+        self.assertGreaterEqual(gate["analysis_depth_score"], 60)
+        self.assertGreaterEqual(gate["evidence_backed_analysis_count"], 2)
+
+    def test_local_quality_gate_downgrades_finished_result_with_unsupported_fact(self) -> None:
+        pack = {
+            "primary_materials": [
+                {
+                    "title": "天津市执行医用耗材集采结果的通知",
+                    "content_text": "天津市医保局明确自2026年6月1日起执行医用耗材集采结果。",
+                    "attachments": [],
+                }
+            ],
+            "auxiliary_materials": [],
+        }
+        result = {
+            "status": "finished",
+            "report_title": "天津市执行医用耗材集采结果分析",
+            "report_markdown": "## 导语\n天津市医保局明确自2026年7月1日起执行医用耗材集采结果。",
+            "quality_check": {"passed": True, "issues": []},
+            "generation_warnings": [],
+            "warnings": [],
+            "remaining_issues": [],
+        }
+
+        gated = main_module._apply_local_quality_gate_to_dify_result(result, pack)
+
+        self.assertEqual(gated["status"], "needs_manual_review")
+        self.assertFalse(gated["quality_check"]["passed"])
+        self.assertEqual(gated["quality_gate"]["deliverable_status"], "needs_manual_review")
+        self.assertIn("Q_LOCAL_QUALITY_GATE", {item["issue_id"] for item in gated["remaining_issues"]})
+
     def test_analysis_run_progress_is_smooth_while_running(self) -> None:
         with patch("app.diagnostics.datetime") as datetime_mock:
             datetime_mock.fromisoformat.side_effect = main_module.datetime.fromisoformat
@@ -1242,11 +1478,11 @@ class RecordsApiTests(unittest.TestCase):
         self.assertIsNone(by_key["revision"]["timestamp"])
         self.assertEqual(by_key["final_output"]["timestamp"], "2026-06-12 10:02:00")
 
-    def test_dify_timeout_error_is_actionable_for_large_pack(self) -> None:
+    def test_dify_timeout_error_gets_non_empty_fallback_report(self) -> None:
         record = {
             "success": True,
             "run_id": "run_timeout123",
-            "pack_id": "pack_timeout",
+            "pack_id": "pack_timeout123",
             "status": "running",
             "workflow_run_id": "",
             "report_title": "",
@@ -1255,21 +1491,390 @@ class RecordsApiTests(unittest.TestCase):
             "created_at": "2026-06-16 10:00:00",
             "updated_at": "2026-06-16 10:00:00",
         }
-        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
-            main_module, "_analysis_run_dir", return_value=main_module.Path(tmpdir), create=True
-        ), patch.object(
+        pack = {
+            "pack_id": "pack_timeout123",
+            "primary_materials": [
+                {
+                    "title": "Large primary notice",
+                    "content_text": "The notice states execution starts on 2026-07-01 and enterprises maintain products.",
+                    "key_facts": [{"name": "execution date", "value": "2026-07-01"}],
+                    "attachments": [
+                        {
+                            "filename": "price-table.xlsx",
+                            "core_attachment": True,
+                            "parse_status": "parsed_table_summary",
+                            "summary": "Attachment includes enterprise, product, selected price and operation path.",
+                            "key_facts": ["enterprise, product and selected price columns exist"],
+                            "table_summaries": [
+                                {
+                                    "sheet_name": "result",
+                                    "headers": ["enterprise", "product", "selected_price"],
+                                    "key_columns": ["enterprise", "product", "selected_price"],
+                                    "summary": "Selected result table contains enterprise product selected price.",
+                                    "business_value": "Supports price and product detail reporting.",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = main_module.Path(tmpdir)
+            run_dir = root / "runs"
+            pack_dir = root / "packs"
+            with patch.object(main_module, "_analysis_run_dir", return_value=run_dir, create=True), patch.object(
+                main_module, "_database_evidence_pack_dir", return_value=pack_dir, create=True
+            ), patch.object(
             main_module,
             "_call_dify_workflow",
-            side_effect=main_module.DifyWorkflowError("DIFY_TIMEOUT", "Dify 工作流调用超时", "timed out", status_code=504),
+                side_effect=main_module.DifyWorkflowError("DIFY_TIMEOUT", "Dify workflow timed out", "timed out", status_code=504),
             create=True,
-        ):
-            main_module._write_analysis_run(record)
-            main_module._execute_analysis_run_background("pack_timeout", "run_timeout123")
-            saved = main_module._read_analysis_run("run_timeout123")
+            ):
+                main_module._write_database_evidence_pack(pack)
+                main_module._write_analysis_run(record)
+                main_module._execute_analysis_run_background("pack_timeout123", "run_timeout123")
+                saved = main_module._read_analysis_run("run_timeout123")
 
-        self.assertEqual(saved["status"], "failed")
-        self.assertIn("证据包较大", saved["error_message"])
-        self.assertIn("减少辅助材料", " ".join(saved["warnings"]))
+        self.assertEqual(saved["status"], "needs_manual_review")
+        self.assertTrue(saved["success"])
+        self.assertGreater(len(saved["report_markdown"]), 300)
+        self.assertEqual(saved["dify_error_code"], "DIFY_TIMEOUT")
+        self.assertIn("Q_DIFY_CALL_FAILED_FALLBACK", {item["issue_id"] for item in saved["remaining_issues"]})
+
+    def test_staged_analysis_run_watchdog_writes_fallback_before_late_dify_result(self) -> None:
+        pack = {
+            "pack_id": "pack_watchdog123",
+            "input_strategy": "staged_generation",
+            "primary_materials": [
+                {"title": "Primary 1", "content_text": "第一份主材料说明执行规则、企业要求和时间节点。" * 20, "attachments": []},
+                {"title": "Primary 2", "content_text": "第二份主材料说明挂网规则、价格要求和风险后果。" * 20, "attachments": []},
+            ],
+            "auxiliary_materials": [],
+            "warnings": [],
+        }
+        record = {
+            "success": True,
+            "run_id": "run_watchdog123",
+            "pack_id": "pack_watchdog123",
+            "status": "running",
+            "workflow_run_id": "",
+            "report_title": "",
+            "report_markdown": "",
+            "quality_check": {"passed": None, "issues": []},
+            "generation_warnings": [],
+            "warnings": [],
+            "remaining_issues": [],
+            "version": 1,
+        }
+        config = {
+            "base_url": "http://dify.local/v1",
+            "api_key": "test-key",
+            "endpoint": "/workflows/run",
+            "response_mode": "blocking",
+            "user": "test",
+            "timeout_seconds": 1,
+            "max_attempts": 1,
+            "retry_backoff_seconds": 0,
+            "staged_timeout_seconds": 1,
+            "staged_max_attempts": 1,
+        }
+
+        def slow_call(pack_id: str, run_id: str, pack_arg: dict | None = None) -> dict:
+            time.sleep(1.4)
+            return {
+                "workflow_run_id": "late-workflow",
+                "status": "finished",
+                "report_title": "late",
+                "report_markdown": "# late",
+                "quality_check": {"passed": True, "issues": []},
+                "generation_warnings": [],
+                "remaining_issues": [],
+                "version": 1,
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = main_module.Path(tmpdir)
+            run_dir = root / "runs"
+            pack_dir = root / "packs"
+            with patch.object(main_module, "_analysis_run_dir", return_value=run_dir, create=True), patch.object(
+                main_module, "_database_evidence_pack_dir", return_value=pack_dir, create=True
+            ), patch.object(main_module, "_dify_config", return_value=config), patch.object(main_module, "_call_dify_workflow", slow_call, create=True), patch.dict(
+                os.environ, {"DIFY_WATCHDOG_GRACE_SECONDS": "0"}
+            ):
+                main_module._write_database_evidence_pack(pack)
+                main_module._write_analysis_run(record)
+                main_module._execute_analysis_run_background("pack_watchdog123", "run_watchdog123")
+                saved = main_module._read_analysis_run("run_watchdog123")
+
+        self.assertEqual(saved["status"], "needs_manual_review")
+        self.assertEqual(saved["dify_error_code"], "DIFY_TIMEOUT")
+        self.assertNotEqual(saved["workflow_run_id"], "late-workflow")
+        self.assertGreater(len(saved["report_markdown"]), 300)
+
+    def test_full_input_analysis_run_watchdog_writes_fallback_before_late_dify_result(self) -> None:
+        pack = {
+            "pack_id": "pack_full_watchdog123",
+            "input_strategy": "full_input",
+            "primary_materials": [
+                {"title": "Short original notice", "content_text": "notice facts and attachment instructions", "attachments": []},
+            ],
+            "auxiliary_materials": [],
+            "warnings": [],
+        }
+        record = {
+            "success": True,
+            "run_id": "run_full_watchdog123",
+            "pack_id": "pack_full_watchdog123",
+            "status": "running",
+            "workflow_run_id": "",
+            "report_title": "",
+            "report_markdown": "",
+            "quality_check": {"passed": None, "issues": []},
+            "generation_warnings": [],
+            "warnings": [],
+            "remaining_issues": [],
+            "version": 1,
+        }
+        config = {
+            "base_url": "http://dify.local/v1",
+            "api_key": "test-key",
+            "endpoint": "/workflows/run",
+            "response_mode": "blocking",
+            "user": "test",
+            "timeout_seconds": 1,
+            "max_attempts": 1,
+            "retry_backoff_seconds": 0,
+            "staged_timeout_seconds": 1,
+            "staged_max_attempts": 1,
+        }
+
+        def slow_call(pack_id: str, run_id: str, pack_arg: dict | None = None) -> dict:
+            time.sleep(1.4)
+            return {
+                "workflow_run_id": "late-full-workflow",
+                "status": "finished",
+                "report_title": "late",
+                "report_markdown": "# late",
+                "quality_check": {"passed": True, "issues": []},
+                "generation_warnings": [],
+                "remaining_issues": [],
+                "version": 1,
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = main_module.Path(tmpdir)
+            run_dir = root / "runs"
+            pack_dir = root / "packs"
+            with patch.object(main_module, "_analysis_run_dir", return_value=run_dir, create=True), patch.object(
+                main_module, "_database_evidence_pack_dir", return_value=pack_dir, create=True
+            ), patch.object(main_module, "_dify_config", return_value=config), patch.object(main_module, "_call_dify_workflow", slow_call, create=True), patch.dict(
+                os.environ, {"DIFY_WATCHDOG_GRACE_SECONDS": "0"}
+            ):
+                main_module._write_database_evidence_pack(pack)
+                main_module._write_analysis_run(record)
+                main_module._execute_analysis_run_background("pack_full_watchdog123", "run_full_watchdog123")
+                saved = main_module._read_analysis_run("run_full_watchdog123")
+
+        self.assertEqual(saved["status"], "needs_manual_review")
+        self.assertEqual(saved["dify_error_code"], "DIFY_TIMEOUT")
+        self.assertNotEqual(saved["workflow_run_id"], "late-full-workflow")
+        self.assertGreater(len(saved["report_markdown"]), 300)
+
+    def test_analysis_run_status_self_heals_timed_out_running_run(self) -> None:
+        pack = {
+            "pack_id": "pack_poll_watchdog123",
+            "input_strategy": "staged_generation",
+            "primary_materials": [
+                {"title": "Long primary notice", "content_text": "procurement facts and price rules " * 100, "attachments": []},
+                {"title": "Second primary notice", "content_text": "execution steps and enterprise duties " * 100, "attachments": []},
+            ],
+            "auxiliary_materials": [],
+            "warnings": [],
+        }
+        record = {
+            "success": True,
+            "run_id": "run_poll_watchdog123",
+            "pack_id": "pack_poll_watchdog123",
+            "status": "running",
+            "workflow_run_id": "",
+            "report_title": "",
+            "report_markdown": "",
+            "quality_check": {"passed": None, "issues": []},
+            "generation_warnings": [],
+            "warnings": [],
+            "remaining_issues": [],
+            "version": 1,
+            "created_at": "2026-01-01 00:00:00",
+            "updated_at": "2026-01-01 00:00:00",
+        }
+        config = {
+            "base_url": "http://dify.local/v1",
+            "api_key": "test-key",
+            "endpoint": "/workflows/run",
+            "response_mode": "blocking",
+            "user": "test",
+            "timeout_seconds": 1,
+            "max_attempts": 1,
+            "retry_backoff_seconds": 0,
+            "staged_timeout_seconds": 1,
+            "staged_max_attempts": 1,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = main_module.Path(tmpdir)
+            run_dir = root / "runs"
+            pack_dir = root / "packs"
+            with patch.object(main_module, "_analysis_run_dir", return_value=run_dir, create=True), patch.object(
+                main_module, "_database_evidence_pack_dir", return_value=pack_dir, create=True
+            ), patch.object(main_module, "_dify_config", return_value=config), patch.object(
+                main_module,
+                "_apply_local_quality_gate_to_dify_result",
+                side_effect=AssertionError("timeout self-heal must not run the heavy quality gate"),
+            ), patch.dict(
+                os.environ, {"DIFY_WATCHDOG_GRACE_SECONDS": "0"}
+            ):
+                main_module._write_database_evidence_pack(pack)
+                main_module._write_analysis_run(record)
+                response = self.client.get("/analysis/runs/run_poll_watchdog123")
+                saved = main_module._read_analysis_run("run_poll_watchdog123")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "needs_manual_review")
+        self.assertEqual(saved["dify_error_code"], "DIFY_TIMEOUT")
+        self.assertGreater(len(saved["report_markdown"]), 300)
+
+    def test_call_dify_workflow_retries_timeout_before_success(self) -> None:
+        calls = {"count": 0}
+
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {
+                    "workflow_run_id": "wf-retry",
+                    "data": {
+                        "status": "succeeded",
+                        "outputs": {
+                            "report_markdown": "## \u5bfc\u8bed\nretry success report",
+                            "report_title": "retry report",
+                        },
+                    },
+                }
+
+        class FakeClient:
+            def __init__(self, timeout: float):
+                self.timeout = timeout
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, *args, **kwargs):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise main_module.httpx.TimeoutException("temporary timeout")
+                return FakeResponse()
+
+        config = {
+            "base_url": "http://dify.local/v1",
+            "api_key": "test-key",
+            "endpoint": "/workflows/run",
+            "response_mode": "blocking",
+            "user": "test",
+            "timeout_seconds": 1,
+            "max_attempts": 2,
+            "retry_backoff_seconds": 0,
+        }
+
+        with patch.object(main_module, "_dify_config", return_value=config), patch.object(main_module.httpx, "Client", FakeClient):
+            result = main_module._call_dify_workflow("pack_retry123", "run_retry123")
+
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(result["workflow_run_id"], "wf-retry")
+        self.assertEqual(result["report_title"], "retry report")
+
+    def test_call_dify_workflow_caps_staged_generation_timeout_and_attempts(self) -> None:
+        calls = {"count": 0, "timeouts": []}
+
+        class FakeClient:
+            def __init__(self, timeout: float):
+                calls["timeouts"].append(timeout)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, *args, **kwargs):
+                calls["count"] += 1
+                raise main_module.httpx.TimeoutException("staged timeout")
+
+        config = {
+            "base_url": "http://dify.local/v1",
+            "api_key": "test-key",
+            "endpoint": "/workflows/run",
+            "response_mode": "blocking",
+            "user": "test",
+            "timeout_seconds": 600,
+            "max_attempts": 3,
+            "retry_backoff_seconds": 0,
+            "staged_timeout_seconds": 300,
+            "staged_max_attempts": 1,
+        }
+
+        with patch.object(main_module, "_dify_config", return_value=config), patch.object(main_module.httpx, "Client", FakeClient):
+            with self.assertRaises(main_module.DifyWorkflowError) as caught:
+                main_module._call_dify_workflow("pack_staged123", "run_staged123", {"input_strategy": "staged_generation"})
+
+        self.assertEqual(caught.exception.code, "DIFY_TIMEOUT")
+        self.assertEqual(calls["count"], 1)
+        self.assertEqual(calls["timeouts"], [300])
+
+    def test_call_dify_workflow_has_wall_clock_timeout_for_blocking_connection(self) -> None:
+        calls = {"count": 0}
+
+        class FakeClient:
+            def __init__(self, timeout: float):
+                self.timeout = timeout
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, *args, **kwargs):
+                calls["count"] += 1
+                time.sleep(2)
+                raise AssertionError("wall timeout should return before this point")
+
+        config = {
+            "base_url": "http://dify.local/v1",
+            "api_key": "test-key",
+            "endpoint": "/workflows/run",
+            "response_mode": "blocking",
+            "user": "test",
+            "timeout_seconds": 1,
+            "max_attempts": 1,
+            "retry_backoff_seconds": 0,
+            "staged_timeout_seconds": 1,
+            "staged_max_attempts": 1,
+        }
+
+        started = time.perf_counter()
+        with patch.object(main_module, "_dify_config", return_value=config), patch.object(main_module.httpx, "Client", FakeClient):
+            with self.assertRaises(main_module.DifyWorkflowError) as caught:
+                main_module._call_dify_workflow("pack_blocking123", "run_blocking123", {"input_strategy": "staged_generation"})
+
+        self.assertEqual(caught.exception.code, "DIFY_TIMEOUT")
+        self.assertEqual(calls["count"], 1)
+        self.assertLess(time.perf_counter() - started, 1.8)
 
     def test_analysis_run_calls_dify_and_persists_report(self) -> None:
         calls: list[tuple[str, str]] = []
@@ -1287,7 +1892,7 @@ class RecordsApiTests(unittest.TestCase):
             ]
         )
 
-        def fake_call(pack_id: str, run_id: str):
+        def fake_call(pack_id: str, run_id: str, pack: dict | None = None):
             calls.append((pack_id, run_id))
             return {
                 "workflow_run_id": "wf-run-1",
@@ -1327,6 +1932,7 @@ class RecordsApiTests(unittest.TestCase):
             report_body = report_response.json()
             self.assertEqual(report_body["report_markdown"], report_markdown)
             self.assertTrue(report_body["quality_check"]["passed"])
+            self.assertIn("quality_gate", report_body)
 
     def test_analysis_run_download_exports_markdown_docx(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1357,6 +1963,41 @@ class RecordsApiTests(unittest.TestCase):
             response.headers["content-type"],
         )
         self.assertGreater(len(response.content), 1000)
+
+    def test_analysis_run_download_reuses_existing_docx_for_same_run_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = main_module.Path(tmpdir) / "runs"
+            report_dir = main_module.Path(tmpdir) / "reports"
+            run_dir.mkdir()
+            calls: list[tuple[str, str]] = []
+
+            def fake_markdown_to_docx(markdown: str, path: main_module.Path, title: str) -> None:
+                calls.append((markdown, title))
+                path.write_bytes(b"PK\x03\x04cached docx content")
+
+            with patch.object(main_module, "_analysis_run_dir", return_value=run_dir, create=True):
+                main_module._write_analysis_run(
+                    {
+                        "success": True,
+                        "run_id": "run_cache1234",
+                        "pack_id": "pack_test",
+                        "status": "finished",
+                        "report_title": "cached report",
+                        "report_markdown": "# cached report\n\nbody",
+                        "version": 2,
+                        "quality_check": {"passed": True, "issues": []},
+                    }
+                )
+            with patch.object(main_module, "_analysis_run_dir", return_value=run_dir, create=True), patch.object(
+                main_module, "REPORT_DIR", report_dir
+            ), patch.object(main_module, "_markdown_to_docx", side_effect=fake_markdown_to_docx):
+                first = self.client.get("/analysis/runs/run_cache1234/download")
+                second = self.client.get("/analysis/runs/run_cache1234/download")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(first.content, second.content)
 
     def test_markdown_docx_uses_manual_report_style_markers(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1603,10 +2244,82 @@ class RecordsApiTests(unittest.TestCase):
         self.assertEqual(repaired["status"], "needs_manual_review")
         self.assertGreater(len(repaired["report_markdown"]), 300)
         self.assertIn("天津市医保局", repaired["report_title"])
+        self.assertNotIn("由于本次自动生成结果未形成完整正文", repaired["report_markdown"])
+        self.assertNotIn("供人工复核", repaired["report_markdown"])
+        self.assertNotIn("Dify", repaired["report_markdown"])
         self.assertNotIn("后端兜底版本", repaired["report_markdown"])
         self.assertTrue(repaired["warnings"])
         self.assertFalse(repaired["quality_check"]["passed"])
         self.assertEqual(repaired["remaining_issues"][0]["issue_id"], "Q_DIFY_FRAGMENTARY_REPORT")
+
+    def test_list_starting_dify_report_without_structure_gets_fallback(self) -> None:
+        pack = {
+            "pack_id": "pack_list_fragment",
+            "primary_materials": [
+                {
+                    "title": "海南医药采购接待日活动通知",
+                    "audittime": "2026-05-21",
+                    "areaname": "海南省",
+                    "content_text": "本通知说明医药采购接待日活动安排、报名方式、问题征集表提交和现场咨询流程。" * 60,
+                    "summary": "活动面向企业收集业务需求和问题建议。",
+                    "key_facts": [{"name": "活动流程", "value": "先解答邮件提交问题，再解答现场提问。"}],
+                    "attachments": [
+                        {
+                            "filename": "业务需求和问题建议征集表.docx",
+                            "summary": "附件为业务需求和问题建议征集表模板。",
+                            "core_attachment": True,
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+            "warnings": [],
+        }
+        result = {
+            "workflow_run_id": "wf-list-fragment",
+            "status": "needs_manual_review",
+            "pack_id": "pack_list_fragment",
+            "report_title": "海南医药采购接待日活动通知分析报告",
+            "report_markdown": "\n".join(
+                [
+                    "- **接待范围**：涵盖政策与经办领域",
+                    "- **活动流程**：优先解答已通过邮件提交的问题",
+                    "- **报名方式**：参会人员须扫描通知二维码报名",
+                    "企业应关注材料提交和现场咨询安排。" * 80,
+                ]
+            ),
+            "version": 1,
+            "quality_check": {"passed": False, "issues": [{"issue_id": "Q001"}]},
+            "generation_warnings": [],
+            "warnings": [],
+            "remaining_issues": [{"issue_id": "Q001"}],
+        }
+
+        repaired = main_module._repair_unusable_dify_result(result, pack)
+
+        self.assertEqual(repaired["status"], "needs_manual_review")
+        self.assertIn("## 导语", repaired["report_markdown"])
+        self.assertEqual(repaired["remaining_issues"][0]["issue_id"], "Q_DIFY_FRAGMENTARY_REPORT")
+
+    def test_dify_success_without_report_markdown_can_be_repaired(self) -> None:
+        raw = {
+            "workflow_run_id": "wf-missing-report",
+            "data": {
+                "status": "succeeded",
+                "outputs": {
+                    "quality_check": '{"passed": false, "issues": [{"issue_id": "Q_MISSING_REPORT"}]}',
+                    "generation_warnings": '["missing report_markdown"]',
+                },
+            },
+        }
+
+        result = main_module._normalize_dify_result(raw, "pack_missing_report")
+
+        self.assertEqual(result["workflow_run_id"], "wf-missing-report")
+        self.assertEqual(result["pack_id"], "pack_missing_report")
+        self.assertEqual(result["report_markdown"], "")
+        self.assertEqual(result["quality_check"]["passed"], False)
+        self.assertEqual(result["remaining_issues"], [])
 
     def test_fragmentary_dify_revision_gets_fallback_from_attachment_rich_pack(self) -> None:
         pack = {
@@ -1779,14 +2492,18 @@ class RecordsApiTests(unittest.TestCase):
             self.assertEqual(body["status"], "running")
             run_id = body["run_id"]
 
-            wait_until(lambda: self.client.get(f"/analysis/runs/{run_id}").json().get("status") == "failed")
+            wait_until(lambda: self.client.get(f"/analysis/runs/{run_id}").json().get("status") == "needs_manual_review")
             status_response = self.client.get(f"/analysis/runs/{run_id}")
+            report_response = self.client.get(f"/analysis/runs/{run_id}/report")
 
         self.assertEqual(status_response.status_code, 200)
         status_body = status_response.json()
-        self.assertFalse(status_body["success"])
-        self.assertEqual(status_body["status"], "failed")
+        self.assertTrue(status_body["success"])
+        self.assertEqual(status_body["status"], "needs_manual_review")
         self.assertEqual(status_body["error_message"], "Dify API 配置不完整")
+        self.assertEqual(status_body["dify_error_code"], "DIFY_NOT_CONFIGURED")
+        self.assertEqual(report_response.status_code, 200)
+        self.assertGreater(len(report_response.json()["report_markdown"]), 100)
 
 
 if __name__ == "__main__":

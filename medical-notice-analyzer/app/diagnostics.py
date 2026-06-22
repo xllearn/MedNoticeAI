@@ -473,6 +473,9 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
         "core_attachment_unparsed_names": core_unparsed_names,
         "attachment_analysis_impact": bool(core_unparsed_names),
         "compression_applied": bool(dify_pack.get("compression_applied")) if dify_pack else False,
+        "input_strategy": str(dify_pack.get("input_strategy") or "") if dify_pack else "",
+        "generation_mode": str(((dify_pack.get("generation_guidance") or {}) if dify_pack else {}).get("generation_mode") or ""),
+        "target_report_length": str(((dify_pack.get("generation_guidance") or {}) if dify_pack else {}).get("target_report_length") or ""),
         "original_pack_chars": int(dify_pack.get("original_pack_chars") or full_pack_chars) if dify_pack else full_pack_chars,
         "compact_pack_chars": int(dify_pack.get("compact_pack_chars") or dify_compact_pack_chars) if dify_pack else dify_compact_pack_chars,
         "compression_strategy": list(dify_pack.get("compression_strategy") or []) if dify_pack else [],
@@ -784,6 +787,245 @@ def _build_report_coverage(record: dict[str, Any], pack: dict[str, Any], pack_di
     }
 
 
+SOURCE_FACT_PATTERNS = [
+    re.compile(r"\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日"),
+    re.compile(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}"),
+    re.compile(r"\d+(?:\.\d+)?\s*(?:元/个|元|万元|%|％|个工作日|工作日|日|天)"),
+    re.compile(r"[\u4e00-\u9fff]{2,18}(?:省|市|自治区|医保局|交易中心|药监局|卫生健康委|采购中心)"),
+]
+
+ANALYSIS_KEYWORDS = [
+    "影响",
+    "风险",
+    "建议",
+    "关注",
+    "需要",
+    "应当",
+    "应",
+    "需",
+    "提示",
+    "判断",
+    "变化",
+    "衔接",
+    "应对",
+]
+
+ANALYSIS_GROUNDING_TERMS = [
+    "医用耗材",
+    "药品",
+    "集采",
+    "挂网",
+    "申报",
+    "采购",
+    "执行",
+    "产品范围",
+    "执行时间",
+    "医保",
+    "支付",
+    "价格",
+    "报价",
+    "中选",
+    "企业",
+    "医疗机构",
+]
+
+TECHNICAL_BODY_PHRASES = [
+    "由于本次自动生成结果未形成完整正文",
+    "供人工复核",
+    "Dify",
+    "evidence_pack",
+    "OCR",
+    "元数据",
+    "自动生成结果",
+    "兜底报告",
+]
+
+
+def _compact_marker(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or ""))
+
+
+def _report_visible_text(markdown: str) -> str:
+    text = _text(markdown)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"^[#>\-\*\+\s]+", "", text, flags=re.M)
+    text = text.replace("|", " ")
+    text = re.sub(r"[*_~]+", "", text)
+    return text
+
+
+def _pack_evidence_text(pack: dict[str, Any]) -> str:
+    if not pack:
+        return ""
+    return json.dumps(pack, ensure_ascii=False, default=str)
+
+
+def _extract_source_fact_markers(text: str) -> list[str]:
+    markers: list[str] = []
+    seen: set[str] = set()
+    for pattern in SOURCE_FACT_PATTERNS:
+        for match in pattern.findall(text):
+            marker = str(match).strip()
+            compact = _compact_marker(marker)
+            if len(compact) < 2 or compact in seen:
+                continue
+            seen.add(compact)
+            markers.append(marker)
+    return markers
+
+
+def _source_fidelity_issues(report_text: str, evidence_text: str) -> list[dict[str, Any]]:
+    compact_evidence = _compact_marker(evidence_text)
+    issues: list[dict[str, Any]] = []
+    for marker in _extract_source_fact_markers(report_text):
+        if _compact_marker(marker) not in compact_evidence:
+            issues.append(
+                {
+                    "code": "UNSUPPORTED_FACT",
+                    "level": "error",
+                    "message": f"报告中的硬事实未在原文证据中找到：{marker}",
+                    "report_text": marker,
+                }
+            )
+    return issues
+
+
+def _sentences(text: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[。！？!?；;\n]+", text) if item.strip()]
+
+
+def _analysis_depth(markdown: str, evidence_text: str) -> dict[str, Any]:
+    report_text = _report_visible_text(markdown)
+    compact_evidence = _compact_marker(evidence_text)
+    sentences = _sentences(report_text)
+    analysis_sentences = [
+        sentence for sentence in sentences if any(keyword in sentence for keyword in ANALYSIS_KEYWORDS)
+    ]
+    backed_count = 0
+    for sentence in analysis_sentences:
+        sentence_markers = _extract_source_fact_markers(sentence)
+        marker_supported = all(_compact_marker(marker) in compact_evidence for marker in sentence_markers)
+        term_supported = any(term in sentence and _compact_marker(term) in compact_evidence for term in ANALYSIS_GROUNDING_TERMS)
+        if marker_supported and term_supported:
+            backed_count += 1
+    analysis_heading_count = len(re.findall(r"(?:^|\n)\s*#{0,6}\s*(?:影响分析|风险提示|企业建议|企业关注|操作建议|分析提示|规则解读)", markdown))
+    score = min(100, backed_count * 25 + min(len(analysis_sentences), 3) * 10 + analysis_heading_count * 15)
+    summary_only_risk = backed_count < 2 or score < 50
+    return {
+        "analysis_depth_score": int(score),
+        "summary_only_risk": bool(summary_only_risk),
+        "evidence_backed_analysis_count": int(backed_count),
+        "analysis_sentence_count": len(analysis_sentences),
+    }
+
+
+def _issue_text(issue: Any) -> str:
+    if isinstance(issue, dict):
+        return json.dumps(issue, ensure_ascii=False, default=str)
+    return str(issue or "")
+
+
+def _has_quality_blocker(record: dict[str, Any]) -> bool:
+    quality_check = record.get("quality_check") if isinstance(record.get("quality_check"), dict) else {}
+    if quality_check.get("passed") is False:
+        return True
+    issues = []
+    for key in ("issues", "remaining_issues"):
+        value = quality_check.get(key) if key == "issues" else record.get(key)
+        if isinstance(value, list):
+            issues.extend(value)
+    blocker_terms = [
+        "unsupported_claim",
+        "unsupported_claims",
+        "over_inference",
+        "missing_table",
+        "missing_core_rule",
+        "quality_json_parse_failed",
+        "fabrication",
+        "table_evidence_mismatch",
+    ]
+    return any(any(term in _issue_text(issue) for term in blocker_terms) for issue in issues)
+
+
+def _build_quality_gate(record: dict[str, Any], pack: dict[str, Any], coverage: dict[str, Any]) -> dict[str, Any]:
+    markdown = _text(record.get("report_markdown"))
+    has_material_evidence = bool(pack.get("primary_materials") or pack.get("auxiliary_materials"))
+    if not has_material_evidence:
+        return {
+            "source_fidelity_score": 100,
+            "unsupported_fact_count": 0,
+            "analysis_depth_score": 0,
+            "summary_only_risk": False,
+            "evidence_backed_analysis_count": 0,
+            "analysis_sentence_count": 0,
+            "deliverable_status": "failed" if str(record.get("status") or "").lower() == "failed" or not markdown.strip() else "deliverable",
+            "blocking_issues": [],
+        }
+    evidence_text = _pack_evidence_text(pack)
+    blocking_issues: list[dict[str, Any]] = []
+    source_issues = _source_fidelity_issues(_report_visible_text(markdown), evidence_text)
+    blocking_issues.extend(source_issues)
+    analysis = _analysis_depth(markdown, evidence_text)
+    if analysis["summary_only_risk"]:
+        blocking_issues.append(
+            {
+                "code": "SUMMARY_ONLY_REPORT",
+                "level": "warning",
+                "message": "报告缺少有原文支撑的影响、风险或建议类分析，存在摘要化风险。",
+            }
+        )
+    if coverage.get("is_report_too_short_by_coverage"):
+        blocking_issues.append(
+            {
+                "code": "MISSING_CORE_COVERAGE",
+                "level": "warning",
+                "message": "报告遗漏主材料核心规则、风险后果或附件表格摘要。",
+            }
+        )
+    technical_hits = [phrase for phrase in TECHNICAL_BODY_PHRASES if phrase in markdown]
+    if technical_hits:
+        blocking_issues.append(
+            {
+                "code": "TECHNICAL_NOTE_IN_REPORT_BODY",
+                "level": "error",
+                "message": "正式报告正文包含技术说明或兜底提示。",
+                "phrases": technical_hits,
+            }
+        )
+    if _has_quality_blocker(record):
+        blocking_issues.append(
+            {
+                "code": "QUALITY_CHECK_BLOCKED",
+                "level": "error",
+                "message": "模型或本地质检已发现阻断交付的问题。",
+            }
+        )
+
+    unsupported_fact_count = len(source_issues)
+    source_fidelity_score = max(0, 100 - unsupported_fact_count * 25 - (20 if technical_hits else 0))
+    status = str(record.get("status") or "").lower()
+    if status == "failed" or not markdown.strip():
+        deliverable_status = "failed"
+    elif blocking_issues:
+        deliverable_status = "needs_manual_review"
+    else:
+        deliverable_status = "deliverable"
+    return {
+        "source_fidelity_score": int(source_fidelity_score),
+        "unsupported_fact_count": int(unsupported_fact_count),
+        "analysis_depth_score": analysis["analysis_depth_score"],
+        "summary_only_risk": analysis["summary_only_risk"],
+        "evidence_backed_analysis_count": analysis["evidence_backed_analysis_count"],
+        "analysis_sentence_count": analysis["analysis_sentence_count"],
+        "deliverable_status": deliverable_status,
+        "blocking_issues": blocking_issues,
+    }
+
+
 def build_run_diagnostics(record: dict[str, Any], pack: dict[str, Any] | None = None, dify_pack: dict[str, Any] | None = None) -> dict[str, Any]:
     pack_diag = build_pack_diagnostics(pack or {}, dify_pack)
     markdown = _text(record.get("report_markdown"))
@@ -795,6 +1037,7 @@ def build_run_diagnostics(record: dict[str, Any], pack: dict[str, Any] | None = 
     versions = _version_items(record, report_chars)
     first_version_chars = next((int(item.get("chars") or 0) for item in versions if int(item.get("version") or 0) == 1), 0)
     coverage = _build_report_coverage(record, pack or {}, pack_diag, report_chars)
+    quality_gate = _build_quality_gate(record, pack or {}, coverage)
 
     diagnosis = [item for item in pack_diag.get("diagnosis", []) if item.get("code") != "OK"]
     evidence_level = pack_diag["estimated_evidence_level"]
@@ -847,6 +1090,14 @@ def build_run_diagnostics(record: dict[str, Any], pack: dict[str, Any] | None = 
                 "报告遗漏主材料核心规则、风险后果或附件表格摘要，建议补齐后再判断字数是否足够。",
             )
         )
+    if quality_gate["deliverable_status"] == "needs_manual_review":
+        diagnosis.append(
+            _diagnosis(
+                "QUALITY_GATE_NEEDS_MANUAL_REVIEW",
+                "warning",
+                "报告未通过原文遵循或分析深度门禁，不能直接标记为可交付。",
+            )
+        )
     if not diagnosis:
         diagnosis.append(_diagnosis("OK", "normal", "报告长度与证据包信息量基本匹配。"))
 
@@ -868,6 +1119,9 @@ def build_run_diagnostics(record: dict[str, Any], pack: dict[str, Any] | None = 
             "total_content_chars": pack_diag["raw_total_content_chars"],
             "estimated_evidence_level": pack_diag["estimated_evidence_level"],
             "suggested_report_length": pack_diag["suggested_report_length"],
+            "input_strategy": pack_diag.get("input_strategy", ""),
+            "generation_mode": pack_diag.get("generation_mode", ""),
+            "target_report_length": pack_diag.get("target_report_length", ""),
         },
         "report": {
             "report_title_exists": bool(_text(record.get("report_title")).strip()),
@@ -879,6 +1133,7 @@ def build_run_diagnostics(record: dict[str, Any], pack: dict[str, Any] | None = 
         },
         "versions": versions,
         "coverage": coverage,
+        "quality_gate": quality_gate,
         "diagnosis": diagnosis,
     }
 
