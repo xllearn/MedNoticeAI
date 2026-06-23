@@ -237,6 +237,34 @@
     .kv div { padding: 9px; border-bottom: 1px solid var(--line); }
     .kv div:nth-child(odd) { color: var(--muted); background: #fafbfc; }
     .kv div:nth-last-child(-n+2) { border-bottom: 0; }
+    .strategy-status {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .strategy-status.normal { background: var(--green-soft); color: var(--green); }
+    .strategy-status.compact { background: var(--orange-soft); color: var(--orange); }
+    .strategy-status.warning { background: var(--danger-soft); color: var(--danger); }
+    .omitted-list { display: grid; gap: 8px; margin-top: 10px; }
+    .omitted-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px;
+      background: #fafbfc;
+    }
+    .flag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .flag {
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      padding: 1px 7px;
+      color: #344054;
+      background: #fff;
+      font-size: 12px;
+    }
+    .flag.warning { border-color: #fecdca; background: var(--danger-soft); color: var(--danger); }
     .log-list { display: grid; gap: 8px; }
     .log-row { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); }
     .log-row b { color: #344054; font-weight: 700; }
@@ -383,6 +411,32 @@
           </div>
         </section>
         <section class="card side-card">
+          <h3>Dify 输入策略诊断</h3>
+          <div class="kv" id="difyStrategyInfo">
+            <div data-key="input_strategy">input_strategy</div><div>-</div>
+            <div data-key="input_strategy_type">input_strategy_type</div><div>-</div>
+            <div data-key="input_strategy_description">input_strategy_description</div><div>-</div>
+            <div data-key="strategy_basis">strategy_basis</div><div>-</div>
+            <div data-key="original_pack_chars">original_pack_chars</div><div>-</div>
+            <div data-key="strategy_basis_chars">strategy_basis_chars</div><div>-</div>
+            <div data-key="final_dify_input_chars">final_dify_input_chars</div><div>-</div>
+            <div data-key="hard_limit_chars">hard_limit_chars</div><div>-</div>
+            <div data-key="full_input_max_chars">full_input_max_chars</div><div>-</div>
+            <div data-key="safe_compact_max_chars">safe_compact_max_chars</div><div>-</div>
+            <div data-key="compression_ratio">compression_ratio</div><div>-</div>
+            <div data-key="compression_applied">compression_applied</div><div>-</div>
+            <div data-key="detail_preserved">detail_preserved</div><div>-</div>
+            <div data-key="primary_detail_preserved">primary_detail_preserved</div><div>-</div>
+            <div data-key="core_attachment_detail_preserved">core_attachment_detail_preserved</div><div>-</div>
+            <div data-key="auxiliary_detail_preserved">auxiliary_detail_preserved</div><div>-</div>
+            <div data-key="full_row_level_detail_preserved">full_row_level_detail_preserved</div><div>-</div>
+            <div data-key="omitted_content_count">omitted_content_count</div><div>-</div>
+            <div data-key="needs_manual_review">needs_manual_review</div><div>-</div>
+          </div>
+          <div class="hint" id="difyStrategyNotes"></div>
+          <div id="omittedContentList" class="omitted-list"></div>
+        </section>
+        <section class="card side-card">
           <h3>附件解析状态</h3>
           <div class="kv" id="attachmentStatus">
             <div>附件总数</div><div>-</div>
@@ -505,6 +559,58 @@
       if (value === true) return '通过';
       if (value === false) return '未通过';
       return '待质检';
+    }
+
+    function yesNo(value) {
+      if (value === true) return '是';
+      if (value === false) return '否';
+      return '-';
+    }
+
+    function packThreshold(pack, key) {
+      return pack?.strategy_thresholds?.[key] ?? pack?.[key] ?? '-';
+    }
+
+    function strategyStatusClass(pack) {
+      if (pack.needs_manual_review || pack.primary_detail_preserved === false || pack.core_attachment_detail_preserved === false) {
+        return 'warning';
+      }
+      if (pack.compression_applied) return 'compact';
+      return 'normal';
+    }
+
+    function strategyStatusLabel(pack) {
+      if (pack.needs_manual_review) return '建议人工复核';
+      if (pack.primary_detail_preserved === false || pack.core_attachment_detail_preserved === false) return '需关注';
+      if (pack.compression_applied) return '轻度压缩';
+      if (pack.detail_preserved === true) return '正常';
+      return '待诊断';
+    }
+
+    function renderOmittedContent(pack) {
+      const list = pack.omitted_content || [];
+      if (!list.length) {
+        $('omittedContentList').innerHTML = '';
+        return;
+      }
+      $('omittedContentList').innerHTML = list.slice(0, 10).map((item) => {
+        const flags = [];
+        if (item.manual_review) flags.push(['建议人工复核', true]);
+        if (item.affects_primary_detail) flags.push(['影响主材料细节', true]);
+        if (item.affects_core_attachment_detail) flags.push(['影响核心附件细节', true]);
+        if (item.affects_auxiliary_detail) flags.push(['影响辅助材料细节', false]);
+        const flagHtml = flags.length
+          ? `<div class="flag-row">${flags.map(([label, warn]) => `<span class="flag ${warn ? 'warning' : ''}">${escapeHtml(label)}</span>`).join('')}</div>`
+          : '';
+        return `
+          <div class="omitted-item">
+            <div><b>${escapeHtml(item.type || '-')}</b></div>
+            <div class="hint">原因：${escapeHtml(item.reason || '-')}</div>
+            <div class="hint">风险：${escapeHtml(item.risk || '-')}</div>
+            ${flagHtml}
+          </div>
+        `;
+      }).join('');
     }
 
     function formatLocalDateTime(value) {
@@ -697,6 +803,35 @@
         <div>统计说明</div><div>建议报告长度根据主材料正文、附件摘要、辅助材料相关片段等加权估算。未解析附件和低相关辅助材料不会作为主要依据。</div>
       `;
       const pack = state.packDiagnostics || {};
+      const finalInputChars = pack.final_dify_input_chars ?? pack.compact_pack_chars ?? pack.dify_compact_pack_chars ?? '-';
+      const statusClassName = strategyStatusClass(pack);
+      $('difyStrategyInfo').innerHTML = `
+        <div data-key="input_strategy">输入策略 / input_strategy</div><div>${escapeHtml(pack.input_strategy || '-')} <span class="strategy-status ${statusClassName}">${escapeHtml(strategyStatusLabel(pack))}</span></div>
+        <div data-key="input_strategy_type">策略类型 / input_strategy_type</div><div>${escapeHtml(pack.input_strategy_type || '-')}</div>
+        <div data-key="input_strategy_description">策略说明 / input_strategy_description</div><div>${escapeHtml(pack.input_strategy_description || '-')}</div>
+        <div data-key="strategy_basis">策略依据 / strategy_basis</div><div>${escapeHtml(pack.strategy_basis || '-')}</div>
+        <div data-key="original_pack_chars">原始证据包字符 / original_pack_chars</div><div>${escapeHtml(pack.original_pack_chars ?? '-')} 字</div>
+        <div data-key="strategy_basis_chars">策略判断字符 / strategy_basis_chars</div><div>${escapeHtml(pack.strategy_basis_chars ?? '-')} 字</div>
+        <div data-key="final_dify_input_chars">最终 Dify 输入 / final_dify_input_chars</div><div>${escapeHtml(finalInputChars)} / ${escapeHtml(packThreshold(pack, 'hard_limit_chars'))} 字</div>
+        <div data-key="hard_limit_chars">硬上限 / hard_limit_chars</div><div>${escapeHtml(packThreshold(pack, 'hard_limit_chars'))} 字</div>
+        <div data-key="full_input_max_chars">full_input 阈值 / full_input_max_chars</div><div>${escapeHtml(packThreshold(pack, 'full_input_max_chars'))} 字</div>
+        <div data-key="safe_compact_max_chars">safe_compact 阈值 / safe_compact_max_chars</div><div>${escapeHtml(packThreshold(pack, 'safe_compact_max_chars'))} 字</div>
+        <div data-key="compression_ratio">压缩比例 / compression_ratio</div><div>${escapeHtml(pack.compression_ratio ?? '-')}</div>
+        <div data-key="compression_applied">实际压缩 / compression_applied</div><div>${escapeHtml(yesNo(pack.compression_applied))}</div>
+        <div data-key="detail_preserved">核心细节完整 / detail_preserved</div><div>${escapeHtml(yesNo(pack.detail_preserved))}</div>
+        <div data-key="primary_detail_preserved">主材料细节完整 / primary_detail_preserved</div><div>${escapeHtml(yesNo(pack.primary_detail_preserved))}</div>
+        <div data-key="core_attachment_detail_preserved">核心附件细节完整 / core_attachment_detail_preserved</div><div>${escapeHtml(yesNo(pack.core_attachment_detail_preserved))}</div>
+        <div data-key="auxiliary_detail_preserved">辅助材料细节完整 / auxiliary_detail_preserved</div><div>${escapeHtml(yesNo(pack.auxiliary_detail_preserved))}</div>
+        <div data-key="full_row_level_detail_preserved">全量行级明细 / full_row_level_detail_preserved</div><div>${escapeHtml(yesNo(pack.full_row_level_detail_preserved))}</div>
+        <div data-key="omitted_content_count">省略内容数量 / omitted_content_count</div><div>${escapeHtml(pack.omitted_content_count ?? 0)}</div>
+        <div data-key="needs_manual_review">建议人工复核 / needs_manual_review</div><div>${escapeHtml(yesNo(pack.needs_manual_review))}</div>
+      `;
+      $('difyStrategyNotes').innerHTML = `
+        input_strategy 表示策略选择依据，不等同于实际压缩；compression_applied 表示是否发生截断、省略、移除或降级。
+        attachment_led 表示正文较短但核心信息在附件中，不代表一定压缩；table_heavy 会保留结构、统计摘要和样例值，不输入全量行。
+        strategy_basis_chars 通常不包含重复二级证据；final_dify_input_chars 是实际传入 Dify 的 compact JSON 大小。
+      `;
+      renderOmittedContent(pack);
       const total = pack.attachment_count ?? 0;
       const parsed = pack.parsed_attachment_count ?? 0;
       const coreTotal = pack.core_attachment_count ?? 0;

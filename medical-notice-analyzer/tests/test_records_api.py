@@ -1019,6 +1019,18 @@ class RecordsApiTests(unittest.TestCase):
         self.assertEqual(compact["generation_guidance"]["detail_policy"], "attachment_led_full_core_attachment")
         self.assertIn("1500-2500", compact["generation_guidance"]["target_report_length"])
         diagnostics = build_pack_diagnostics(pack, compact)
+        for field in (
+            "input_strategy",
+            "input_strategy_type",
+            "input_strategy_description",
+            "strategy_basis",
+            "strategy_basis_chars",
+            "final_dify_input_chars",
+            "compression_applied",
+            "detail_preserved",
+            "omitted_content_count",
+        ):
+            self.assertIn(field, diagnostics)
         self.assertEqual(diagnostics["input_strategy"], "attachment_led")
         self.assertEqual(diagnostics["input_strategy_type"], "structure_based")
         self.assertIn("附件主导", diagnostics["input_strategy_description"])
@@ -1517,6 +1529,9 @@ class RecordsApiTests(unittest.TestCase):
 
         self.assertEqual(page_response.status_code, 200)
         self.assertIn("报告生成详情", page_response.text)
+        self.assertIn("Dify 输入策略诊断", page_response.text)
+        self.assertIn('data-key="input_strategy"', page_response.text)
+        self.assertIn('data-key="final_dify_input_chars"', page_response.text)
         self.assertEqual(status_response.status_code, 200)
         self.assertEqual(status_response.json()["progress"]["percent"], 100)
         self.assertEqual(diagnostics_response.status_code, 200)

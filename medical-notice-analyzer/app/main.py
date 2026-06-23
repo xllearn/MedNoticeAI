@@ -1782,7 +1782,6 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int | None 
     compact["compression_ratio"] = round(original_pack_chars / compact["final_dify_input_chars"], 4) if compact["final_dify_input_chars"] else None
     _refresh_dify_char_fields(compact)
     compact["compression_ratio"] = round(original_pack_chars / compact["final_dify_input_chars"], 4) if compact["final_dify_input_chars"] else None
-    _refresh_dify_char_fields(compact)
     return compact
 
 
