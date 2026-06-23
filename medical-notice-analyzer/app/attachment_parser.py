@@ -114,6 +114,97 @@ def _business_table_flags(headers: list[str]) -> dict[str, bool]:
     }
 
 
+FIELD_COLUMN_KEYWORDS = {
+    "enterprise": ["enterprise", "company", "manufacturer", "supplier", "distributor", "企业", "申报企业", "生产企业", "配送企业", "浼佷笟"],
+    "product": ["product", "item", "goods", "耗材", "产品", "通用名", "项目名称", "浜у搧", "椤圭洰"],
+    "registration_cert": ["registration", "certificate", "cert", "注册证", "备案号", "娉ㄥ唽璇", "澶囨"],
+    "medical_insurance_code": ["medical_insurance", "insurance_code", "医保编码", "医保耗材代码", "医保代码", "鍖讳繚"],
+    "price": ["price", "selected_price", "bid_price", "申报价", "报价", "中选价", "挂网价", "价格", "浠锋牸", "鎶ヤ环", "涓€変环"],
+    "purchase_volume": ["purchase_volume", "volume", "quantity", "采购量", "报量", "需求量", "约定采购量", "閲囪喘閲", "鎶ラ噺"],
+    "selected_status": ["selected_status", "status", "selected", "winner", "中选", "拟中选", "入围", "状态", "涓€", "鐘舵€"],
+    "region": ["region", "province", "city", "area", "地区", "省", "市", "地市", "鍦板尯"],
+    "group": ["group", "category", "分组", "分类", "组别", "鍒嗙粍", "鍒嗙被"],
+}
+
+
+def _column_type_map(headers: list[str]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {field: [] for field in FIELD_COLUMN_KEYWORDS}
+    for header in headers:
+        normalized = str(header or "")
+        normalized_lower = normalized.lower()
+        for field, keywords in FIELD_COLUMN_KEYWORDS.items():
+            if any(keyword.lower() in normalized_lower for keyword in keywords):
+                result[field].append(normalized)
+    return result
+
+
+def _numeric_value(value: Any) -> float | None:
+    text = _clean_text(value)
+    if not text:
+        return None
+    match = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def _field_stats(headers: list[str], data_rows: list[list[str]], column_map: dict[str, list[str]]) -> tuple[dict[str, Any], list[str]]:
+    warnings: list[str] = []
+    header_index = {header: index for index, header in enumerate(headers)}
+    stats: dict[str, Any] = {}
+    for field, columns in column_map.items():
+        if not columns:
+            continue
+        non_empty = 0
+        unique_values: set[str] = set()
+        sample_values: list[str] = []
+        numeric_values: list[float] = []
+        for row in data_rows:
+            for column in columns:
+                index = header_index.get(column)
+                if index is None or index >= len(row):
+                    continue
+                value = _clean_text(row[index])
+                if not value:
+                    continue
+                non_empty += 1
+                unique_values.add(value)
+                if len(sample_values) < 5 and value not in sample_values:
+                    sample_values.append(value)
+                if field in {"price", "purchase_volume"}:
+                    number = _numeric_value(value)
+                    if number is not None:
+                        numeric_values.append(number)
+        item: dict[str, Any] = {
+            "columns": columns,
+            "non_empty_count": non_empty,
+            "unique_count": len(unique_values),
+            "sample_values": sample_values,
+        }
+        if field in {"price", "purchase_volume"}:
+            if numeric_values:
+                item["min"] = min(numeric_values)
+                item["max"] = max(numeric_values)
+                item["sample_numeric_values"] = numeric_values[:5]
+            elif non_empty:
+                warnings.append(f"{field} columns could not be parsed as numeric values")
+        stats[field] = item
+    return stats, warnings
+
+
+def _table_evidence_score(flags: dict[str, bool], field_stats: dict[str, Any], *, rows: int, table_heavy: bool) -> int:
+    score = min(35, sum(8 for value in flags.values() if value))
+    score += min(35, len(field_stats) * 6)
+    if table_heavy:
+        score += 20
+    if rows >= 5000:
+        score += 10
+    return max(0, score)
+
+
 def _float_env(name: str, default: float) -> float:
     try:
         return float((os.getenv(name) or "").strip() or default)
@@ -201,18 +292,39 @@ def _table_summary(
     headers: list[str],
     sample_count: int,
     default_business_value: str,
+    data_rows: list[list[str]] | None = None,
 ) -> dict[str, Any]:
     key_columns = _key_columns(headers)
+    column_map = _column_type_map(headers)
+    field_stats, stats_warnings = _field_stats(headers, data_rows or [], column_map)
+    flags = _business_table_flags(headers)
+    table_heavy = rows >= max(1, _int_env("TABLE_HEAVY_ROW_THRESHOLD", 5000))
+    evidence_value_score = _table_evidence_score(flags, field_stats, rows=rows, table_heavy=table_heavy)
     return {
         "sheet_name": sheet_name,
         "rows": rows,
         "columns_count": columns,
         "headers": headers,
         "key_columns": key_columns,
+        "enterprise_columns": column_map["enterprise"],
+        "product_columns": column_map["product"],
+        "registration_cert_columns": column_map["registration_cert"],
+        "medical_insurance_code_columns": column_map["medical_insurance_code"],
+        "price_columns": column_map["price"],
+        "purchase_volume_columns": column_map["purchase_volume"],
+        "selected_status_columns": column_map["selected_status"],
+        "region_columns": column_map["region"],
+        "group_columns": column_map["group"],
         "sample_rows_count": sample_count,
         "summary": f"该表主要包含 {rows} 行、{columns} 列，关键字段包括：{', '.join(key_columns or headers[:6])}。",
         "business_value": default_business_value,
-        **_business_table_flags(headers),
+        "field_stats": field_stats,
+        "field_stats_warnings": stats_warnings,
+        "table_heavy": table_heavy,
+        "evidence_value_score": evidence_value_score,
+        "data_completeness_hint": f"field_stats scanned {len(data_rows or [])} data rows; rows keeps the worksheet total row count.",
+        "recommended_report_usage": "Use the field structure, key columns, statistics, and sample values to analyze product scope, enterprise scope, price, purchase-volume, or selected-result fields; do not list full rows or invent missing row-level values.",
+        **flags,
     }
 
 
@@ -318,11 +430,16 @@ def _convert_doc_to_docx(content: bytes, filename: str) -> tuple[bytes, list[str
 def _parse_xlsx(content: bytes) -> list[dict[str, Any]]:
     wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     summaries: list[dict[str, Any]] = []
+    max_scan_rows = max(1, _int_env("TABLE_STATS_MAX_SCAN_ROWS", 5000))
     for ws in wb.worksheets:
         preview_rows = [_row_values(row) for row in ws.iter_rows(values_only=True, max_row=25)]
         headers, header_index = _select_header_row(preview_rows)
         rows = ws.max_row or len(preview_rows)
         columns = ws.max_column or len(headers)
+        data_rows: list[list[str]] = []
+        if headers:
+            for row in ws.iter_rows(values_only=True, min_row=header_index + 2, max_row=min(rows, header_index + 1 + max_scan_rows)):
+                data_rows.append(_row_values(row))
         summaries.append(
             _table_summary(
                 sheet_name=ws.title,
@@ -330,6 +447,7 @@ def _parse_xlsx(content: bytes) -> list[dict[str, Any]]:
                 columns=columns,
                 headers=headers,
                 sample_count=min(max(rows - header_index - 1, 0), 20),
+                data_rows=data_rows,
                 default_business_value="可用于分析产品范围、企业申报口径、价格字段或采购清单结构。",
             )
         )
@@ -339,12 +457,17 @@ def _parse_xlsx(content: bytes) -> list[dict[str, Any]]:
 def _parse_xls(content: bytes) -> list[dict[str, Any]]:
     book = xlrd.open_workbook(file_contents=content)
     summaries: list[dict[str, Any]] = []
+    max_scan_rows = max(1, _int_env("TABLE_STATS_MAX_SCAN_ROWS", 5000))
     for sheet in book.sheets():
         preview_rows = [
             [str(sheet.cell_value(row, col)).strip() for col in range(sheet.ncols)]
             for row in range(min(sheet.nrows, 25))
         ]
         headers, header_index = _select_header_row(preview_rows)
+        data_rows = [
+            [str(sheet.cell_value(row, col)).strip() for col in range(sheet.ncols)]
+            for row in range(header_index + 1, min(sheet.nrows, header_index + 1 + max_scan_rows))
+        ]
         summaries.append(
             _table_summary(
                 sheet_name=sheet.name,
@@ -352,6 +475,7 @@ def _parse_xls(content: bytes) -> list[dict[str, Any]]:
                 columns=sheet.ncols,
                 headers=headers,
                 sample_count=min(max(sheet.nrows - header_index - 1, 0), 20),
+                data_rows=data_rows,
                 default_business_value="可用于分析产品范围、企业申报口径、价格字段或采购清单结构。",
             )
         )
@@ -362,13 +486,18 @@ def _parse_csv(content: bytes) -> list[dict[str, Any]]:
     text = content.decode("utf-8-sig", errors="replace")
     reader = csv.reader(io.StringIO(text))
     preview_rows: list[list[str]] = []
+    scanned_rows: list[list[str]] = []
     row_count = 0
+    max_scan_rows = max(1, _int_env("TABLE_STATS_MAX_SCAN_ROWS", 5000))
     for row in reader:
         normalized = _row_values(row)
         if row_count < 25:
             preview_rows.append(normalized)
+        if len(scanned_rows) < max_scan_rows:
+            scanned_rows.append(normalized)
         row_count += 1
     headers, header_index = _select_header_row(preview_rows)
+    data_rows = scanned_rows[header_index + 1 : header_index + 1 + max_scan_rows]
     return [
         _table_summary(
             sheet_name="CSV",
@@ -376,6 +505,7 @@ def _parse_csv(content: bytes) -> list[dict[str, Any]]:
             columns=len(headers),
             headers=headers,
             sample_count=min(max(row_count - header_index - 1, 0), 20),
+            data_rows=data_rows,
             default_business_value="可用于分析清单类结构化信息。",
         )
     ]

@@ -844,10 +844,187 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _dify_input_thresholds() -> dict[str, int]:
+    hard_limit = max(10_000, _env_int("DIFY_VARIABLE_HARD_MAX_CHARS", 80_000))
+    full_input = min(hard_limit, max(1000, _env_int("DIFY_FULL_INPUT_MAX_CHARS", 65_000)))
+    safe_compact = min(hard_limit, max(full_input, _env_int("DIFY_SAFE_COMPACT_MAX_CHARS", 75_000)))
     return {
-        "full_input": max(1000, _env_int("DIFY_FULL_INPUT_MAX_CHARS", 60_000)),
-        "light_compact": max(10_000, _env_int("DIFY_LIGHT_COMPACT_MAX_CHARS", 120_000)),
+        "hard_limit": hard_limit,
+        "full_input": full_input,
+        "safe_compact": safe_compact,
+        "light_compact": safe_compact,
     }
+
+
+_EVIDENCE_VALUE_KEYWORDS = [
+    "申报",
+    "采购",
+    "价格",
+    "报价",
+    "申报价",
+    "中选价",
+    "挂网价",
+    "中选",
+    "拟中选",
+    "产品",
+    "企业",
+    "注册证",
+    "医保编码",
+    "医保耗材代码",
+    "采购量",
+    "报量",
+    "需求量",
+    "协议采购量",
+    "执行",
+    "周期",
+    "配送",
+    "信用评价",
+    "价格联动",
+    "selected",
+    "enterprise",
+    "product",
+    "price",
+    "purchase",
+    "volume",
+]
+
+
+def _table_summary_has_business_flags(table: dict[str, Any]) -> bool:
+    return any(
+        bool(table.get(key))
+        for key in [
+            "contains_enterprise",
+            "contains_product",
+            "contains_registration_cert",
+            "contains_medical_insurance_code",
+            "contains_price",
+            "contains_purchase_volume",
+            "contains_selected_status",
+        ]
+    )
+
+
+def _table_summary_is_heavy(table: dict[str, Any]) -> bool:
+    if bool(table.get("table_heavy")):
+        return True
+    rows = int(table.get("rows") or 0)
+    return rows >= max(1, _env_int("TABLE_HEAVY_ROW_THRESHOLD", 5000))
+
+
+def _pack_has_table_heavy_primary(primary_source: list[dict[str, Any]]) -> bool:
+    for material in primary_source:
+        for attachment in material.get("attachments") or []:
+            if not isinstance(attachment, dict):
+                continue
+            for table in attachment.get("table_summaries") or []:
+                if isinstance(table, dict) and _table_summary_is_heavy(table):
+                    return True
+    return False
+
+
+def _evidence_keyword_hits(value: Any) -> int:
+    text = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value or "")
+    return sum(1 for keyword in _EVIDENCE_VALUE_KEYWORDS if keyword.lower() in text.lower())
+
+
+def _evidence_value_score_attachment(attachment: dict[str, Any], *, role: str) -> int:
+    score = 40 if role == "primary" else 12
+    if attachment.get("core_attachment"):
+        score += 35
+    business_type = str(attachment.get("business_type") or attachment.get("filename") or "")
+    if any(keyword in business_type for keyword in ["中选", "产品", "价格", "采购", "申报", "企业", "配送", "报量", "selected", "price"]):
+        score += 20
+    score += min(25, _evidence_keyword_hits(attachment) * 2)
+    parse_status = str(attachment.get("parse_status") or "")
+    if parse_status in {"parsed_text", "parsed_summary", "parsed_table_summary", "temp_file_parsed"}:
+        score += 15
+    elif parse_status in {"metadata_only", "download_failed", "parse_failed", "unsupported"}:
+        score -= 8
+    table_score = 0
+    for table in attachment.get("table_summaries") or []:
+        if not isinstance(table, dict):
+            continue
+        if _table_summary_has_business_flags(table):
+            table_score += 12
+        if _table_summary_is_heavy(table):
+            table_score += 10
+        table_score += int(table.get("evidence_value_score") or 0) // 5
+    return max(0, score + min(40, table_score))
+
+
+def _evidence_value_score_material(material: dict[str, Any], *, role: str) -> int:
+    score = 60 if role == "primary" else 15
+    score += min(30, _evidence_keyword_hits({k: material.get(k) for k in ["title", "summary", "content_text", "content_summary"]}) * 2)
+    if role == "auxiliary":
+        try:
+            score += int(float(material.get("relevance_score") or 0) * 20)
+        except (TypeError, ValueError):
+            pass
+    attachment_scores = [
+        _evidence_value_score_attachment(item, role=role)
+        for item in material.get("attachments") or []
+        if isinstance(item, dict)
+    ]
+    if attachment_scores:
+        score += min(70, max(attachment_scores) + sum(attachment_scores[:3]) // 5)
+    return max(0, score)
+
+
+def _dify_relevant_input_chars(pack: dict[str, Any], primary_source: list[dict[str, Any]], auxiliary_source: list[dict[str, Any]]) -> int:
+    primary_payload = []
+    for material in primary_source:
+        primary_payload.append(
+            {
+                "metadata": {key: material.get(key) for key in ["menu_code", "articleid", "title", "audittime", "areaname", "publicorg", "projecttype", "category"]},
+                "summary": material.get("summary"),
+                "content_text": material.get("content_text"),
+                "content_summary": material.get("content_summary"),
+                "key_facts": material.get("key_facts"),
+                "important_passages": material.get("important_passages"),
+                "policy_rules": material.get("policy_rules"),
+                "price_rules": material.get("price_rules"),
+                "time_requirements": material.get("time_requirements"),
+                "product_scope": material.get("product_scope"),
+                "enterprise_requirements": material.get("enterprise_requirements"),
+                "execution_requirements": material.get("execution_requirements"),
+                "attachments": [
+                    {
+                        "filename": attachment.get("filename"),
+                        "core_attachment": attachment.get("core_attachment"),
+                        "business_type": attachment.get("business_type"),
+                        "parse_status": attachment.get("parse_status"),
+                        "download_status": attachment.get("download_status"),
+                        "summary": attachment.get("summary"),
+                        "key_facts": attachment.get("key_facts"),
+                        "important_sections": attachment.get("important_sections"),
+                        "table_summaries": attachment.get("table_summaries"),
+                        "warnings": attachment.get("warnings"),
+                    }
+                    for attachment in material.get("attachments") or []
+                    if isinstance(attachment, dict)
+                ],
+            }
+        )
+    auxiliary_payload = []
+    for material in auxiliary_source:
+        auxiliary_payload.append(
+            {
+                "metadata": {key: material.get(key) for key in ["menu_code", "articleid", "title", "audittime", "areaname", "publicorg", "projecttype", "category"]},
+                "content_summary": material.get("content_summary") or material.get("summary"),
+                "relation_to_primary": material.get("relation_to_primary"),
+                "relevance_score": material.get("relevance_score"),
+                "relevant_snippets": material.get("relevant_snippets"),
+                "usable_points": material.get("usable_points"),
+            }
+        )
+    payload = {
+        "primary_materials": primary_payload,
+        "auxiliary_materials": auxiliary_payload,
+        "combined_key_facts": pack.get("combined_key_facts"),
+        "report_focus": pack.get("report_focus"),
+        "warnings": pack.get("warnings"),
+        "generation_guidance": pack.get("generation_guidance"),
+    }
+    return len(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
 def _attachment_count(materials: list[dict[str, Any]]) -> int:
@@ -857,16 +1034,25 @@ def _attachment_count(materials: list[dict[str, Any]]) -> int:
 def _dify_input_strategy(
     *,
     original_pack_chars: int,
+    dify_relevant_input_chars: int | None = None,
     primary_source: list[dict[str, Any]],
     auxiliary_source: list[dict[str, Any]],
 ) -> str:
     thresholds = _dify_input_thresholds()
-    attachment_count = _attachment_count([*primary_source, *auxiliary_source])
-    if original_pack_chars > thresholds["light_compact"] or len(primary_source) >= 2:
+    relevant_chars = dify_relevant_input_chars if dify_relevant_input_chars is not None else original_pack_chars
+    if len(primary_source) >= 2:
         return "staged_generation"
-    if original_pack_chars <= thresholds["full_input"]:
+    if any(_is_attachment_led_primary_material(material) for material in primary_source):
+        return "attachment_led"
+    if _pack_has_table_heavy_primary(primary_source):
+        return "table_heavy"
+    if relevant_chars <= thresholds["full_input"]:
         return "full_input"
-    return "light_compact"
+    if relevant_chars <= thresholds["safe_compact"]:
+        return "light_compact"
+    if relevant_chars <= thresholds["hard_limit"]:
+        return "safe_compact"
+    return "staged_generation"
 
 
 def _target_report_length_guidance(primary_source: list[dict[str, Any]], auxiliary_source: list[dict[str, Any]]) -> str:
@@ -881,6 +1067,27 @@ def _target_report_length_guidance(primary_source: list[dict[str, Any]], auxilia
     if primary_count >= 2 or auxiliary_count >= 2:
         return "3000-5000字；多主材料或2+n场景按主材料分段、辅助材料作背景，并允许更多表格。"
     return "1800-3000字；按公告要点、规则、附件细节、企业影响和建议补齐。"
+
+
+def _evidence_budget_for_strategy(input_strategy: str, *, primary_count: int, auxiliary_count: int) -> dict[str, Any]:
+    if input_strategy == "attachment_led":
+        budget = {"primary_body_pct": 18, "primary_attachment_pct": 57, "auxiliary_pct": 10, "guidance_warnings_pct": 15}
+    elif input_strategy == "table_heavy":
+        budget = {"primary_body_pct": 18, "table_summary_pct": 52, "attachment_sections_pct": 20, "auxiliary_pct": 10}
+    elif input_strategy == "safe_compact":
+        budget = {"primary_body_and_rules_pct": 30, "primary_core_attachment_pct": 45, "auxiliary_pct": 10, "guidance_warnings_omitted_pct": 15}
+    elif input_strategy == "light_compact":
+        budget = {"primary_body_pct": 35, "primary_attachment_pct": 35, "auxiliary_pct": 15, "guidance_warnings_pct": 15}
+    elif input_strategy == "staged_generation":
+        budget = {
+            "per_primary_material": True,
+            "primary_material_count": primary_count,
+            "auxiliary_background_only": True,
+            "auxiliary_material_count": auxiliary_count,
+        }
+    else:
+        budget = {"primary_body": "full", "primary_attachment": "full", "auxiliary": "summary_and_relevant_snippets", "compression": "none"}
+    return budget
 
 
 def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "primary", preserve_detail: bool = False) -> dict[str, Any]:
@@ -913,6 +1120,15 @@ def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "pri
                 "columns_count": table.get("columns_count") or 0,
                 "headers": list(table.get("headers") or [])[:table_header_limit],
                 "key_columns": list(table.get("key_columns") or [])[:table_key_column_limit],
+                "enterprise_columns": list(table.get("enterprise_columns") or [])[:table_key_column_limit],
+                "product_columns": list(table.get("product_columns") or [])[:table_key_column_limit],
+                "registration_cert_columns": list(table.get("registration_cert_columns") or [])[:table_key_column_limit],
+                "medical_insurance_code_columns": list(table.get("medical_insurance_code_columns") or [])[:table_key_column_limit],
+                "price_columns": list(table.get("price_columns") or [])[:table_key_column_limit],
+                "purchase_volume_columns": list(table.get("purchase_volume_columns") or [])[:table_key_column_limit],
+                "selected_status_columns": list(table.get("selected_status_columns") or [])[:table_key_column_limit],
+                "region_columns": list(table.get("region_columns") or [])[:table_key_column_limit],
+                "group_columns": list(table.get("group_columns") or [])[:table_key_column_limit],
                 "contains_enterprise": bool(table.get("contains_enterprise")),
                 "contains_product": bool(table.get("contains_product")),
                 "contains_registration_cert": bool(table.get("contains_registration_cert")),
@@ -921,6 +1137,13 @@ def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "pri
                 "contains_price": bool(table.get("contains_price")),
                 "contains_selected_status": bool(table.get("contains_selected_status")),
                 "contains_purchase_volume": bool(table.get("contains_purchase_volume")),
+                "table_heavy": bool(table.get("table_heavy") or _table_summary_is_heavy(table)),
+                "field_stats": copy.deepcopy(table.get("field_stats") or {}),
+                "evidence_value_score": int(table.get("evidence_value_score") or 0),
+                "data_completeness_hint": table.get("data_completeness_hint") or "",
+                "recommended_report_usage": table.get("recommended_report_usage") or (
+                    "Use this structured table summary to analyze product scope, enterprise scope, price or purchase-volume fields; do not invent row-level values that are not provided."
+                ),
                 "summary": summary if preserve_detail else _limit_text(summary, table_summary_limit),
                 "business_value": business_value if preserve_detail else _limit_text(business_value, table_business_limit),
             }
@@ -940,7 +1163,7 @@ def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "pri
         key_fact_limit = max(key_fact_limit, len(list(attachment.get("key_facts") or [])))
         section_limit = max(section_limit, len(list(attachment.get("important_sections") or [])))
         section_chars = 1200
-    return {
+    compact = {
         "articleattid": attachment.get("articleattid") or "",
         "filename": attachment.get("filename") or "",
         "fileext": attachment.get("fileext") or "",
@@ -960,6 +1183,8 @@ def _compact_attachment_for_dify(attachment: dict[str, Any], *, role: str = "pri
         ],
         "table_summaries": table_summaries,
     }
+    compact["evidence_value_score"] = _evidence_value_score_attachment(attachment, role=role)
+    return compact
 
 
 def _compact_material_for_dify(
@@ -1014,6 +1239,7 @@ def _compact_material_for_dify(
         "key_facts": list(material.get("key_facts") or [])[:key_fact_limit],
         "attachments": [_compact_attachment_for_dify(item, role=role, preserve_detail=preserve_detail) for item in attachments[:attachment_limit]],
         "warnings": [_limit_text(item, 220) for item in list(material.get("warnings") or [])[:6]],
+        "evidence_value_score": _evidence_value_score_material(material, role=role),
     }
     if role == "primary":
         compact.update(
@@ -1056,17 +1282,26 @@ def _compact_primary_content_limit(primary_source: list[dict[str, Any]], auxilia
     return 7600
 
 
-def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000) -> dict[str, Any]:
+def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int | None = None) -> dict[str, Any]:
     original_pack_chars = len(json.dumps(pack, ensure_ascii=False, sort_keys=True))
     primary_source = [item for item in list(pack.get("primary_materials") or [])[:3] if isinstance(item, dict)]
     auxiliary_source = [item for item in list(pack.get("auxiliary_materials") or [])[:10] if isinstance(item, dict)]
+    thresholds = _dify_input_thresholds()
+    hard_limit = thresholds["hard_limit"]
+    target_max_chars = max_chars or hard_limit
+    dify_relevant_input_chars = _dify_relevant_input_chars(pack, primary_source, auxiliary_source)
     input_strategy = _dify_input_strategy(
         original_pack_chars=original_pack_chars,
+        dify_relevant_input_chars=dify_relevant_input_chars,
         primary_source=primary_source,
         auxiliary_source=auxiliary_source,
     )
-    preserve_detail = input_strategy == "full_input"
-    primary_content_limit = _compact_primary_content_limit(primary_source, auxiliary_source, original_pack_chars, max_chars)
+    preserve_detail = input_strategy in {"full_input", "attachment_led"}
+    primary_content_limit = _compact_primary_content_limit(primary_source, auxiliary_source, dify_relevant_input_chars, target_max_chars)
+    if input_strategy == "safe_compact":
+        primary_content_limit = min(primary_content_limit, 12000)
+    elif input_strategy == "table_heavy":
+        primary_content_limit = min(primary_content_limit, 9000)
     primary = [
         _compact_material_for_dify(
             item,
@@ -1077,23 +1312,76 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         )
         for item in primary_source
     ]
+    auxiliary_content_limit = 900
+    auxiliary_attachment_limit = 4
+    if input_strategy == "safe_compact":
+        auxiliary_content_limit = 600
+        auxiliary_attachment_limit = 2
+    elif input_strategy in {"attachment_led", "table_heavy"}:
+        auxiliary_content_limit = 700
+        auxiliary_attachment_limit = 2
     auxiliary = [
-        _compact_material_for_dify(item, "auxiliary", content_limit=900, attachment_limit=4, preserve_detail=preserve_detail)
+        _compact_material_for_dify(item, "auxiliary", content_limit=auxiliary_content_limit, attachment_limit=auxiliary_attachment_limit, preserve_detail=False)
         for item in auxiliary_source
     ]
     omitted_content: list[dict[str, str]] = []
     if input_strategy != "full_input":
-        omitted_content.append({"type": "attachment_full_text", "reason": "附件全文和 Excel 全量行数据不进入 Dify，仅保留摘要和结构化信息。"})
+        omitted_content.append(
+            {
+                "type": "attachment_full_text",
+                "reason": "附件全文和 Excel 全量行数据不进入 Dify，仅保留摘要、关键事实、字段统计和结构化表格信息。",
+                "risk": "模型不能逐行核验未输入的附件明细；涉及产品级核验时需人工打开附件。",
+                "manual_review": input_strategy in {"safe_compact", "table_heavy", "staged_generation"},
+            }
+        )
+    if input_strategy == "safe_compact":
+        omitted_content.append(
+            {
+                "type": "auxiliary_content_tail",
+                "reason": "输入接近 Dify 变量限制，辅助材料只保留摘要、相关片段和相关性分数。",
+                "risk": "辅助材料细节可能未完整进入 Dify，但主材料和核心附件优先保留。",
+                "manual_review": False,
+            }
+        )
+    if input_strategy == "table_heavy":
+        omitted_content.append(
+            {
+                "type": "excel_full_rows",
+                "reason": "表格行数较多，未将全量行输入 Dify，仅保留字段结构、统计摘要和样例值。",
+                "risk": "模型无法逐行核验全部产品明细，如需精确产品级核验应人工打开附件。",
+                "manual_review": True,
+            }
+        )
     if any(len([item for item in list(material.get("attachments") or []) if isinstance(item, dict)]) > 5 for material in list(pack.get("auxiliary_materials") or []) if isinstance(material, dict)):
         omitted_content.append(
             {
                 "type": "auxiliary_attachment_overflow",
                 "reason": "辅助材料附件较多，Dify 精简版仅保留核心或排序靠前的结构化摘要，避免工作流超时。",
+                "risk": "辅助材料附件细节不会作为主材料结论依据。",
+                "manual_review": False,
+            }
+        )
+    unavailable_core_attachments = [
+        attachment
+        for material in [*primary_source, *auxiliary_source]
+        for attachment in material.get("attachments") or []
+        if isinstance(attachment, dict) and attachment.get("core_attachment") and not _attachment_is_usable_for_dify(attachment)
+    ]
+    for attachment in unavailable_core_attachments:
+        omitted_content.append(
+            {
+                "type": "core_attachment_unavailable",
+                "filename": str(attachment.get("filename") or ""),
+                "reason": "核心附件下载或解析失败，仅保留元数据和失败状态。",
+                "risk": "报告不能展开该附件中的产品、企业、价格或中选结果明细。",
+                "manual_review": True,
             }
         )
     compact: dict[str, Any] = {
         "pack_variant": "dify_compact",
         "input_strategy": input_strategy,
+        "attachment_led": input_strategy == "attachment_led",
+        "table_heavy": input_strategy == "table_heavy",
         "pack_id": pack.get("pack_id") or "",
         "created_at": pack.get("created_at") or "",
         "pack_version": pack.get("pack_version") or "2.0",
@@ -1105,6 +1393,7 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         "warnings": [_limit_text(item, 260) for item in list(pack.get("warnings") or [])[:8]],
         "generation_guidance": copy.deepcopy(pack.get("generation_guidance") or {}),
     }
+    compact["evidence_budget"] = _evidence_budget_for_strategy(input_strategy, primary_count=len(primary_source), auxiliary_count=len(auxiliary_source))
     compact["generation_guidance"]["target_report_length"] = _target_report_length_guidance(primary_source, auxiliary_source)
     compact["generation_guidance"]["mandatory_sections"] = [
         "导语",
@@ -1120,8 +1409,24 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         compact["generation_guidance"]["detail_policy"] = "small_input_no_compression"
         compact["generation_guidance"]["generation_mode"] = "single_pass_full_evidence"
         compact["generation_guidance"]["detail_instruction"] = (
-            "输入证据量较小，不要压缩正文、附件摘要、表格摘要、产品/价格字段或操作步骤；"
+            "输入证据量未超过安全阈值，主材料正文和主附件解析结果已尽量完整保留；"
+            "不要因为 evidence_pack 有 compact 标记就写得过短；"
             "报告篇幅应来自事实覆盖和证据支撑型分析，不得无依据扩写。"
+        )
+    elif input_strategy == "attachment_led":
+        compact["generation_guidance"]["detail_policy"] = "attachment_led_full_core_attachment"
+        compact["generation_guidance"]["generation_mode"] = "single_pass_attachment_led"
+        compact["generation_guidance"]["detail_instruction"] = (
+            "主材料正文较短，核心信息在主材料附件；应以核心附件 summary、key_facts、important_sections、table_summaries 为主体依据，"
+            "展开产品范围、企业、价格、时间节点、执行规则或中选结果；不得因为正文短而只生成简短摘要。"
+        )
+        compact["generation_guidance"]["target_report_length"] = "1500-2500字；正文短但附件为主时，按附件表格、产品/价格/操作步骤展开。"
+    elif input_strategy == "table_heavy":
+        compact["generation_guidance"]["detail_policy"] = "table_heavy_structured_summary"
+        compact["generation_guidance"]["generation_mode"] = "single_pass_large_table_structured_summary"
+        compact["generation_guidance"]["detail_instruction"] = (
+            "附件为大表格或关键字段表格，系统未输入全量行；已输入字段结构、关键列、统计摘要和样例值。"
+            "报告应基于这些结构化信息分析附件价值，不得编造未提供的具体产品、企业、价格。"
         )
     elif input_strategy == "staged_generation":
         compact["generation_guidance"]["detail_policy"] = "large_input_staged_compact"
@@ -1129,6 +1434,13 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         compact["generation_guidance"]["detail_instruction"] = (
             "证据包较大或多主材料多附件，先分别梳理每个主材料和核心附件规则，再综合成报告；"
             "辅助材料只作背景，不能覆盖主材料结论。"
+        )
+    elif input_strategy == "safe_compact":
+        compact["generation_guidance"]["detail_policy"] = "safe_compact_primary_core_first"
+        compact["generation_guidance"]["generation_mode"] = "single_pass_safe_compact"
+        compact["generation_guidance"]["detail_instruction"] = (
+            "输入接近变量限制，系统优先保留主材料正文、关键规则、核心附件摘要和 table_summaries；"
+            "辅助材料只作背景，不得把辅助材料当作主材料事实。"
         )
     else:
         compact["generation_guidance"]["detail_policy"] = "medium_input_light_compact"
@@ -1188,12 +1500,34 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         "warnings": [],
     }
     compact["dify_compacted"] = True
-    compact["compression_applied"] = input_strategy != "full_input" and original_pack_chars > max_chars
+    compact["compression_applied"] = input_strategy != "full_input" and original_pack_chars > target_max_chars
     compact["original_pack_chars"] = original_pack_chars
+    compact["dify_relevant_input_chars"] = dify_relevant_input_chars
+    compact["hard_limit_chars"] = hard_limit
+    compact["full_input_max_chars"] = thresholds["full_input"]
+    compact["safe_compact_max_chars"] = thresholds["safe_compact"]
     compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+    compact["primary_evidence_score"] = sum(int(item.get("evidence_value_score") or 0) for item in primary)
+    compact["auxiliary_evidence_score"] = sum(int(item.get("evidence_value_score") or 0) for item in auxiliary)
+    compact["attachment_evidence_score"] = sum(
+        int(attachment.get("evidence_value_score") or 0)
+        for material in [*primary, *auxiliary]
+        for attachment in material.get("attachments") or []
+        if isinstance(attachment, dict)
+    )
+    compact["table_evidence_score"] = sum(
+        int(table.get("evidence_value_score") or 0)
+        for material in [*primary, *auxiliary]
+        for attachment in material.get("attachments") or []
+        if isinstance(attachment, dict)
+        for table in attachment.get("table_summaries") or []
+        if isinstance(table, dict)
+    )
     compact["compression_strategy"] = [
         "小输入不压缩正文、附件摘要和附件表格摘要",
         "中等输入只清理重复公告模板、免责声明和低价值技术 warning",
+        "接近 Dify 限制时优先保留主材料和核心附件，压缩辅助材料",
+        "大表格不输入全量行，保留字段结构、字段统计、样例值和报告使用建议",
         "大输入或复杂多材料先按材料保留核心规则，再综合生成",
         "保留主材料正文、关键事实、核心附件摘要、表格列名、产品/价格字段和操作步骤",
         "辅助材料优先保留相关片段和可用要点，不能反客为主",
@@ -1201,8 +1535,17 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
     compact["omitted_content"] = omitted_content
     compact["dify_compaction_note"] = "Structured compact evidence pack for Dify variable-size limits. Use ?full=true for full evidence pack."
 
-    while len(json.dumps(compact, ensure_ascii=False, sort_keys=True)) > max_chars:
+    secondary_blocks_removed = False
+    while len(json.dumps(compact, ensure_ascii=False, sort_keys=True)) > target_max_chars:
         changed = False
+        if not secondary_blocks_removed and any(key in compact for key in ["primary_evidence", "auxiliary_evidence", "attachment_evidence"]):
+            compact.pop("primary_evidence", None)
+            compact.pop("auxiliary_evidence", None)
+            compact.pop("attachment_evidence", None)
+            compact["omitted_content"].append({"type": "secondary_evidence_blocks", "reason": "超过 Dify 变量长度限制，已移除重复的二级证据汇总块。"})
+            secondary_blocks_removed = True
+            compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+            continue
         for material in compact.get("primary_materials", []):
             text = str(material.get("content_text") or "")
             if len(text) > 2500:
@@ -1225,10 +1568,13 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int = 65000
         if changed:
             compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
             continue
-        compact.pop("primary_evidence", None)
-        compact.pop("auxiliary_evidence", None)
-        compact.pop("attachment_evidence", None)
-        compact["omitted_content"].append({"type": "secondary_evidence_blocks", "reason": "超过 Dify 变量长度限制，已移除重复的二级证据汇总块。"})
+        compact["omitted_content"].append(
+            {
+                "type": "hard_limit_residual_overflow",
+                "reason": "证据包已执行所有保守压缩动作后仍接近或超过 Dify 变量限制，应走分段生成或人工复核。",
+                "manual_review": True,
+            }
+        )
         break
     compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
     compact["compression_applied"] = False if input_strategy == "full_input" else compact["compact_pack_chars"] < original_pack_chars
@@ -1332,16 +1678,10 @@ def _dify_input_strategy_from_pack(pack: dict[str, Any] | None) -> str:
         return strategy
     primary_source = [item for item in pack.get("primary_materials") or [] if isinstance(item, dict)]
     auxiliary_source = [item for item in pack.get("auxiliary_materials") or [] if isinstance(item, dict)]
-    evidence_chars = 0
-    for material in [*primary_source, *auxiliary_source]:
-        evidence_chars += _material_content_text_length(material)
-        evidence_chars += len(_clean_inline_text(material.get("summary")))
-        evidence_chars += _material_attachment_evidence_chars(material)
-        evidence_chars += sum(len(_clean_inline_text(value)) for value in material.get("price_rules") or [])
-        evidence_chars += sum(len(_clean_inline_text(value)) for value in material.get("time_requirements") or [])
-        evidence_chars += sum(len(_clean_inline_text(value)) for value in material.get("product_scope") or [])
+    evidence_chars = _dify_relevant_input_chars(pack, primary_source, auxiliary_source)
     return _dify_input_strategy(
         original_pack_chars=evidence_chars,
+        dify_relevant_input_chars=evidence_chars,
         primary_source=primary_source,
         auxiliary_source=auxiliary_source,
     )

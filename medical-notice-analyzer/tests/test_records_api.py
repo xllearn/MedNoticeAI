@@ -459,6 +459,43 @@ class RecordsApiTests(unittest.TestCase):
         self.assertTrue(table["contains_purchase_volume"])
         self.assertEqual(table["sample_rows_count"], 20)
 
+    def test_excel_parser_adds_field_stats_and_table_heavy_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workbook_path = main_module.Path(tmpdir) / "selected-result.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "selected_result"
+            ws.append(["enterprise", "product", "registration_cert", "medical_insurance_code", "selected_price", "purchase_volume", "selected_status", "region"])
+            for index in range(20):
+                ws.append(
+                    [
+                        f"Enterprise {index % 4}",
+                        f"Product {index}",
+                        f"CERT-{index}",
+                        f"MI-{index}",
+                        str(10 + index * 0.5),
+                        str(100 + index),
+                        "selected" if index % 2 == 0 else "pending",
+                        "Region A",
+                    ]
+                )
+            wb.save(workbook_path)
+
+            with patch.dict(os.environ, {"TABLE_HEAVY_ROW_THRESHOLD": "10", "TABLE_STATS_MAX_SCAN_ROWS": "12"}, clear=False):
+                result = parse_attachment_bytes(workbook_path.read_bytes(), "selected-result.xlsx", ".xlsx", workbook_path.stat().st_size)
+
+        table = result["table_summaries"][0]
+        self.assertTrue(table["table_heavy"])
+        self.assertIn("enterprise", table["enterprise_columns"])
+        self.assertIn("selected_price", table["price_columns"])
+        self.assertIn("purchase_volume", table["purchase_volume_columns"])
+        self.assertEqual(table["field_stats"]["enterprise"]["non_empty_count"], 12)
+        self.assertLessEqual(table["field_stats"]["enterprise"]["unique_count"], 4)
+        self.assertEqual(table["field_stats"]["price"]["min"], 10.0)
+        self.assertEqual(table["field_stats"]["price"]["max"], 15.5)
+        self.assertIn("recommended_report_usage", table)
+        self.assertGreater(table["evidence_value_score"], 0)
+
     def test_old_url_attachment_discovery_includes_text_html_and_zip_files(self) -> None:
         html = """
         <a href="/notice.txt">附件 TXT</a>
@@ -855,7 +892,9 @@ class RecordsApiTests(unittest.TestCase):
         compact = compact_response.json()
         self.assertTrue(compact["dify_compacted"])
         self.assertLess(len(json.dumps(compact, ensure_ascii=False)), 80000)
-        self.assertLess(len(compact["primary_materials"][0]["attachments"][0]["summary"]), len(long_attachment_summary))
+        self.assertEqual(compact["input_strategy"], "full_input")
+        self.assertEqual(compact["primary_materials"][0]["attachments"][0]["summary"], long_attachment_summary)
+        self.assertLessEqual(compact["dify_relevant_input_chars"], compact["full_input_max_chars"])
         self.assertEqual(compact["pack_variant"], "dify_compact")
         self.assertIn("compression_strategy", compact)
         self.assertIn("omitted_content", compact)
@@ -972,14 +1011,186 @@ class RecordsApiTests(unittest.TestCase):
         attachment = compact["primary_materials"][0]["attachments"][0]
         table = attachment["table_summaries"][0]
 
-        self.assertEqual(compact["input_strategy"], "full_input")
+        self.assertEqual(compact["input_strategy"], "attachment_led")
+        self.assertTrue(compact["attachment_led"])
         self.assertFalse(compact["compression_applied"])
         self.assertEqual(attachment["summary"], long_summary)
         self.assertEqual(table["summary"], long_table_summary)
-        self.assertEqual(compact["generation_guidance"]["detail_policy"], "small_input_no_compression")
+        self.assertEqual(compact["generation_guidance"]["detail_policy"], "attachment_led_full_core_attachment")
         self.assertIn("1500-2500", compact["generation_guidance"]["target_report_length"])
         diagnostics = build_pack_diagnostics(pack, compact)
-        self.assertEqual(diagnostics["input_strategy"], "full_input")
+        self.assertEqual(diagnostics["input_strategy"], "attachment_led")
+
+    def test_dify_input_uses_essential_size_not_duplicate_bulk_for_full_input(self) -> None:
+        content_text = "primary deadline price operation step " * 900
+        attachment_summary = "core attachment selected result enterprise product price " * 420
+        duplicated_evidence = {"attachment_summaries": [{"summary": "duplicate secondary evidence " * 5000}]}
+        pack = {
+            "pack_id": "pack_duplicate_bulk_small_essential",
+            "primary_materials": [
+                {
+                    "material_role": "primary",
+                    "menu_code": "m1",
+                    "articleid": "p1",
+                    "title": "Primary notice",
+                    "content_text": content_text,
+                    "content_text_length": len(content_text),
+                    "attachments": [
+                        {
+                            "articleattid": "att1",
+                            "filename": "selected-result.xlsx",
+                            "core_attachment": True,
+                            "business_type": "selected result",
+                            "parse_status": "parsed_summary",
+                            "summary": attachment_summary,
+                            "key_facts": ["selected price and enterprise fields are present"],
+                            "important_sections": ["operation path and deadline are listed in the attachment"],
+                            "table_summaries": [],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [
+                {
+                    "menu_code": "m2",
+                    "articleid": "a1",
+                    "title": "Auxiliary reference",
+                    "content_text": "auxiliary full body should not drive strategy " * 2000,
+                    "content_summary": "auxiliary summary only",
+                    "relation_to_primary": "background reference",
+                    "relevance_score": 0.6,
+                    "relevant_snippets": ["similar price operation"],
+                    "usable_points": ["background only"],
+                    "attachments": [],
+                }
+            ],
+            "primary_evidence": duplicated_evidence,
+            "attachment_evidence": duplicated_evidence,
+            "generation_guidance": {},
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+
+        self.assertGreater(compact["original_pack_chars"], 65000)
+        self.assertEqual(compact["input_strategy"], "full_input")
+        self.assertFalse(compact["compression_applied"])
+        self.assertEqual(compact["primary_materials"][0]["content_text"], content_text)
+        self.assertEqual(compact["primary_materials"][0]["attachments"][0]["summary"], attachment_summary)
+        self.assertLessEqual(compact["dify_relevant_input_chars"], compact["full_input_max_chars"])
+
+    def test_dify_input_uses_safe_compact_near_hard_limit_and_keeps_core_attachment(self) -> None:
+        primary_text = "primary procurement rule deadline execution " * 900
+        core_summary = "core attachment enterprise product selected price purchase volume " * 550
+        aux_body = "auxiliary historical background should be compacted " * 800
+        pack = {
+            "pack_id": "pack_safe_compact_near_limit",
+            "primary_materials": [
+                {
+                    "menu_code": "m1",
+                    "articleid": "p1",
+                    "title": "Primary notice",
+                    "content_text": primary_text,
+                    "content_text_length": len(primary_text),
+                    "attachments": [
+                        {
+                            "articleattid": "att1",
+                            "filename": "core-price-table.xlsx",
+                            "core_attachment": True,
+                            "business_type": "price table",
+                            "parse_status": "parsed_table_summary",
+                            "summary": core_summary,
+                            "table_summaries": [
+                                {
+                                    "sheet_name": "result",
+                                    "rows": 4800,
+                                    "columns_count": 8,
+                                    "headers": ["enterprise", "product", "selected_price", "purchase_volume"],
+                                    "key_columns": ["enterprise", "product", "selected_price", "purchase_volume"],
+                                    "summary": "table summary " * 120,
+                                    "business_value": "supports price and purchase volume analysis",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [
+                {
+                    "menu_code": "m2",
+                    "articleid": "a1",
+                    "title": "Auxiliary",
+                    "content_text": aux_body,
+                    "content_summary": "auxiliary summary",
+                    "relation_to_primary": "background only",
+                    "relevance_score": 0.4,
+                    "relevant_snippets": ["similar historical rule"],
+                    "usable_points": ["background only"],
+                }
+            ],
+            "generation_guidance": {},
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+
+        self.assertEqual(compact["input_strategy"], "safe_compact")
+        self.assertLessEqual(compact["compact_pack_chars"], compact["hard_limit_chars"])
+        self.assertTrue(compact["primary_materials"][0]["attachments"][0]["table_summaries"])
+        self.assertLessEqual(len(compact["auxiliary_materials"][0]["content_text"]), 700)
+        self.assertIn("auxiliary_content_tail", {item["type"] for item in compact["omitted_content"]})
+        self.assertIn("safe_compact", compact["generation_guidance"]["detail_policy"])
+
+    def test_dify_input_marks_single_primary_large_table_as_table_heavy(self) -> None:
+        pack = {
+            "pack_id": "pack_table_heavy",
+            "primary_materials": [
+                {
+                    "menu_code": "m1",
+                    "articleid": "p1",
+                    "title": "Large table notice",
+                    "content_text": "primary body is long enough to avoid attachment-led mode " * 30,
+                    "content_text_length": 1600,
+                    "attachments": [
+                        {
+                            "articleattid": "att1",
+                            "filename": "large-selected-result.csv",
+                            "core_attachment": True,
+                            "business_type": "selected result",
+                            "parse_status": "parsed_table_summary",
+                            "summary": "large table summary",
+                            "table_summaries": [
+                                {
+                                    "sheet_name": "CSV",
+                                    "rows": 30000,
+                                    "columns_count": 9,
+                                    "headers": ["enterprise", "product", "registration_cert", "selected_price", "purchase_volume"],
+                                    "key_columns": ["enterprise", "product", "selected_price", "purchase_volume"],
+                                    "contains_enterprise": True,
+                                    "contains_product": True,
+                                    "contains_price": True,
+                                    "contains_purchase_volume": True,
+                                    "field_stats": {
+                                        "enterprise": {"columns": ["enterprise"], "non_empty_count": 3000, "unique_count": 200}
+                                    },
+                                    "summary": "large selected result table",
+                                    "business_value": "supports enterprise product price and purchase volume analysis",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+            "generation_guidance": {},
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+
+        self.assertEqual(compact["input_strategy"], "table_heavy")
+        self.assertTrue(compact["table_heavy"])
+        self.assertIn("large_table_structured_summary", compact["generation_guidance"]["generation_mode"])
+        table = compact["primary_materials"][0]["attachments"][0]["table_summaries"][0]
+        self.assertEqual(table["field_stats"]["enterprise"]["unique_count"], 200)
+        self.assertIn("recommended_report_usage", table)
 
     def test_dify_input_marks_large_multi_material_pack_for_staged_generation(self) -> None:
         attachments = [

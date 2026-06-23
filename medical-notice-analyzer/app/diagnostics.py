@@ -448,9 +448,32 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
     if not diagnosis:
         diagnosis.append(_diagnosis("OK", "normal", "附件解析和证据包压缩状态正常。"))
 
+    omitted_content = list(dify_pack.get("omitted_content") or []) if dify_pack else []
+    omitted_content_summary = [
+        {
+            "type": item.get("type", ""),
+            "reason": item.get("reason", ""),
+            "manual_review": bool(item.get("manual_review")),
+        }
+        for item in omitted_content[:12]
+        if isinstance(item, dict)
+    ]
+    needs_manual_review_reasons: list[str] = []
+    if core_unparsed_names:
+        needs_manual_review_reasons.append("存在核心附件未解析，附件明细分析受限。")
+    for item in omitted_content:
+        if isinstance(item, dict) and item.get("manual_review"):
+            reason = str(item.get("reason") or item.get("type") or "存在需人工复核的省略内容")
+            if reason not in needs_manual_review_reasons:
+                needs_manual_review_reasons.append(reason)
+    if dify_pack and dify_pack.get("input_strategy") in {"safe_compact", "table_heavy", "staged_generation"} and dify_pack.get("compression_applied"):
+        needs_manual_review_reasons.append("Dify 输入发生压缩，需关注被省略内容是否影响交付质量。")
+
     return {
         "primary_count": len(primary),
         "auxiliary_count": len(auxiliary),
+        "primary_material_count": len(primary),
+        "auxiliary_material_count": len(auxiliary),
         "primary_content_chars": primary_content_chars,
         "primary_summary_chars": primary_summary_chars,
         "primary_key_fact_chars": primary_key_fact_chars,
@@ -463,6 +486,7 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
         "auxiliary_attachment_table_summary_chars": auxiliary_attachment_table_summary_chars,
         "raw_total_content_chars": raw_total_content_chars,
         "dify_compact_pack_chars": dify_compact_pack_chars,
+        "dify_input_chars": dify_compact_pack_chars,
         "full_pack_chars": full_pack_chars,
         "weighted_evidence_chars": weighted_evidence_chars,
         "total_content_chars": raw_total_content_chars,
@@ -474,12 +498,27 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
         "attachment_analysis_impact": bool(core_unparsed_names),
         "compression_applied": bool(dify_pack.get("compression_applied")) if dify_pack else False,
         "input_strategy": str(dify_pack.get("input_strategy") or "") if dify_pack else "",
+        "hard_limit_chars": int(dify_pack.get("hard_limit_chars") or 0) if dify_pack else 0,
+        "full_input_max_chars": int(dify_pack.get("full_input_max_chars") or 0) if dify_pack else 0,
+        "safe_compact_max_chars": int(dify_pack.get("safe_compact_max_chars") or 0) if dify_pack else 0,
+        "evidence_budget": dict(dify_pack.get("evidence_budget") or {}) if dify_pack else {},
         "generation_mode": str(((dify_pack.get("generation_guidance") or {}) if dify_pack else {}).get("generation_mode") or ""),
         "target_report_length": str(((dify_pack.get("generation_guidance") or {}) if dify_pack else {}).get("target_report_length") or ""),
         "original_pack_chars": int(dify_pack.get("original_pack_chars") or full_pack_chars) if dify_pack else full_pack_chars,
         "compact_pack_chars": int(dify_pack.get("compact_pack_chars") or dify_compact_pack_chars) if dify_pack else dify_compact_pack_chars,
         "compression_strategy": list(dify_pack.get("compression_strategy") or []) if dify_pack else [],
-        "omitted_content": list(dify_pack.get("omitted_content") or []) if dify_pack else [],
+        "omitted_content": omitted_content,
+        "omitted_content_count": len(omitted_content),
+        "omitted_content_summary": omitted_content_summary,
+        "unavailable_core_attachment_count": attachment_counts["core_attachment_unparsed_count"],
+        "attachment_led": bool(dify_pack.get("attachment_led")) if dify_pack else bool(attachment_led_primary_count),
+        "table_heavy": bool(dify_pack.get("table_heavy")) if dify_pack else False,
+        "primary_evidence_score": int(dify_pack.get("primary_evidence_score") or 0) if dify_pack else 0,
+        "attachment_evidence_score": int(dify_pack.get("attachment_evidence_score") or 0) if dify_pack else 0,
+        "auxiliary_evidence_score": int(dify_pack.get("auxiliary_evidence_score") or 0) if dify_pack else 0,
+        "table_evidence_score": int(dify_pack.get("table_evidence_score") or 0) if dify_pack else 0,
+        "needs_manual_review": bool(needs_manual_review_reasons),
+        "needs_manual_review_reasons": needs_manual_review_reasons,
         "unparsed_attachment_count": unparsed_count,
         "key_fact_count": sum(len(item.get("key_facts") or []) for item in primary) + len(pack.get("combined_key_facts") or []),
         "warnings_count": len(warnings),

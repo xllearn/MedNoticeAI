@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import httpx
 import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -280,14 +282,15 @@ class ReportV2GateTests(unittest.TestCase):
         self.assertIn("needs manual confirmation", response.qa_summary)
 
     def test_export_checked_exports_when_qa_status_pass(self) -> None:
-        response = export_report_checked(
-            CheckedExportReportRequest(
-                report_ir=sample_report_ir(),
-                qa_status="pass",
-                qa_result={"summary": "ok"},
-                strict_quality=True,
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(main_module, "REPORT_DIR", Path(tmpdir)):
+            response = export_report_checked(
+                CheckedExportReportRequest(
+                    report_ir=sample_report_ir(),
+                    qa_status="pass",
+                    qa_result={"summary": "ok"},
+                    strict_quality=True,
+                )
             )
-        )
 
         self.assertTrue(response.success)
         self.assertFalse(response.blocked)

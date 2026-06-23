@@ -30,7 +30,9 @@ class DifyRunStatsScriptTests(unittest.TestCase):
         self.assertIn("Dify node totals", text)
 
     def test_docs_explain_dify_builtin_token_and_timing_stats(self) -> None:
-        docs = README.read_text(encoding="utf-8") + "\n" + HANDOFF.read_text(encoding="utf-8")
+        docs = README.read_text(encoding="utf-8")
+        if HANDOFF.exists():
+            docs += "\n" + HANDOFF.read_text(encoding="utf-8")
 
         self.assertIn("Dify 内置 token 与耗时统计", docs)
         self.assertIn("scripts\\dify_run_stats.ps1", docs)
