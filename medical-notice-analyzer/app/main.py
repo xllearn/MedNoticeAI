@@ -1055,6 +1055,106 @@ def _dify_input_strategy(
     return "staged_generation"
 
 
+def _dify_input_strategy_type(input_strategy: str) -> str:
+    return {
+        "full_input": "size_based",
+        "light_compact": "size_based",
+        "safe_compact": "size_based",
+        "attachment_led": "structure_based",
+        "table_heavy": "structure_based",
+        "staged_generation": "complexity_based",
+    }.get(input_strategy, "size_based")
+
+
+def _dify_input_strategy_description(input_strategy: str) -> str:
+    return {
+        "full_input": (
+            "完整证据输入策略：关键证据量未超过安全阈值，系统尽量完整保留主材料正文、"
+            "主材料附件摘要、表格摘要和辅助材料摘要。"
+        ),
+        "light_compact": (
+            "轻压缩输入策略：关键证据量处于中等区间，系统只清理重复模板、免责声明和低价值噪声，"
+            "保留核心规则、操作步骤、表格列名、产品范围和价格字段。"
+        ),
+        "safe_compact": (
+            "安全压缩策略：输入接近 Dify 变量上限，系统优先保留主材料和核心附件，压缩辅助材料与低价值重复内容。"
+        ),
+        "attachment_led": (
+            "附件主导型生成策略：主材料正文较短，但核心附件已解析出可用摘要或表格结构。"
+            "该策略不是压缩模式，未超限时仍会尽量完整保留主附件证据。"
+        ),
+        "table_heavy": (
+            "大表格结构化输入策略：附件行数较多或包含企业、产品、价格、采购量等关键字段。"
+            "系统不输入全量行，而是输入字段结构、统计摘要和样例值。"
+        ),
+        "staged_generation": (
+            "复杂材料分段生成策略：多主材料或证据量超过单次 Dify 输入安全范围，"
+            "应先按材料梳理规则，再综合生成报告。"
+        ),
+    }.get(input_strategy, "Dify 自适应输入策略。")
+
+
+def _dify_input_strategy_basis(input_strategy: str, *, relevant_chars: int, thresholds: dict[str, int], primary_source: list[dict[str, Any]]) -> str:
+    if input_strategy == "staged_generation" and len(primary_source) >= 2:
+        return "multi_primary_materials"
+    if input_strategy == "attachment_led":
+        return "short_primary_body_with_usable_core_attachment"
+    if input_strategy == "table_heavy":
+        return "primary_table_rows_exceed_table_heavy_threshold"
+    if input_strategy == "full_input":
+        return "dify_relevant_input_chars_within_full_input_threshold"
+    if input_strategy == "light_compact":
+        return "dify_relevant_input_chars_within_light_compact_threshold"
+    if input_strategy == "safe_compact":
+        return "near_hard_limit"
+    if input_strategy == "staged_generation":
+        return "dify_relevant_input_chars_exceeds_hard_limit"
+    return "adaptive_input_strategy_default"
+
+
+def _omitted_content_entry(
+    omitted_type: str,
+    *,
+    reason: str,
+    risk: str = "",
+    manual_review: bool = False,
+    affects_primary_detail: bool = False,
+    affects_core_attachment_detail: bool = False,
+    affects_auxiliary_detail: bool = False,
+    **extra: Any,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "type": omitted_type,
+        "reason": reason,
+        "risk": risk,
+        "manual_review": bool(manual_review),
+        "affects_primary_detail": bool(affects_primary_detail),
+        "affects_core_attachment_detail": bool(affects_core_attachment_detail),
+        "affects_auxiliary_detail": bool(affects_auxiliary_detail),
+    }
+    entry.update({key: value for key, value in extra.items() if value not in (None, "")})
+    return entry
+
+
+def _refresh_dify_char_fields(compact: dict[str, Any]) -> int:
+    previous = -1
+    current = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+    for _ in range(6):
+        compact["compact_pack_chars"] = current
+        compact["final_dify_input_chars"] = current
+        next_size = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+        if next_size == current or next_size == previous:
+            current = next_size
+            compact["compact_pack_chars"] = current
+            compact["final_dify_input_chars"] = current
+            return current
+        previous = current
+        current = next_size
+    compact["compact_pack_chars"] = current
+    compact["final_dify_input_chars"] = current
+    return current
+
+
 def _target_report_length_guidance(primary_source: list[dict[str, Any]], auxiliary_source: list[dict[str, Any]]) -> str:
     primary_count = len(primary_source)
     auxiliary_count = len(auxiliary_source)
@@ -1324,43 +1424,62 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int | None 
         _compact_material_for_dify(item, "auxiliary", content_limit=auxiliary_content_limit, attachment_limit=auxiliary_attachment_limit, preserve_detail=False)
         for item in auxiliary_source
     ]
-    omitted_content: list[dict[str, str]] = []
+    omitted_content: list[dict[str, Any]] = []
+    compression_reason: list[str] = []
+    primary_detail_preserved = True
+    core_attachment_detail_preserved = True
+    auxiliary_detail_preserved = True
+    full_row_level_detail_preserved = True
     if input_strategy != "full_input":
         omitted_content.append(
-            {
-                "type": "attachment_full_text",
-                "reason": "附件全文和 Excel 全量行数据不进入 Dify，仅保留摘要、关键事实、字段统计和结构化表格信息。",
-                "risk": "模型不能逐行核验未输入的附件明细；涉及产品级核验时需人工打开附件。",
-                "manual_review": input_strategy in {"safe_compact", "table_heavy", "staged_generation"},
-            }
+            _omitted_content_entry(
+                "attachment_full_text",
+                reason="附件全文和 Excel 全量行数据不进入 Dify，仅保留摘要、关键事实、字段统计和结构化表格信息。",
+                risk="模型不能逐行核验未输入的附件明细；涉及产品级核验时需人工打开附件。",
+                manual_review=input_strategy in {"safe_compact", "table_heavy", "staged_generation"},
+                affects_core_attachment_detail=False,
+            )
         )
+    if input_strategy == "light_compact":
+        compression_reason.append("light_compact_duplicate_noise_removed")
     if input_strategy == "safe_compact":
+        compression_reason.append("safe_compact_primary_core_first")
+        compression_reason.append("auxiliary_content_trimmed")
+        auxiliary_detail_preserved = False
         omitted_content.append(
-            {
-                "type": "auxiliary_content_tail",
-                "reason": "输入接近 Dify 变量限制，辅助材料只保留摘要、相关片段和相关性分数。",
-                "risk": "辅助材料细节可能未完整进入 Dify，但主材料和核心附件优先保留。",
-                "manual_review": False,
-            }
+            _omitted_content_entry(
+                "auxiliary_content_tail",
+                reason="输入接近 Dify 变量限制，辅助材料只保留摘要、相关片段和相关性分数。",
+                risk="辅助材料细节可能未完整进入 Dify，但主材料和核心附件优先保留。",
+                manual_review=False,
+                affects_auxiliary_detail=True,
+            )
         )
     if input_strategy == "table_heavy":
+        compression_reason.append("table_full_rows_not_included")
+        full_row_level_detail_preserved = False
         omitted_content.append(
-            {
-                "type": "excel_full_rows",
-                "reason": "表格行数较多，未将全量行输入 Dify，仅保留字段结构、统计摘要和样例值。",
-                "risk": "模型无法逐行核验全部产品明细，如需精确产品级核验应人工打开附件。",
-                "manual_review": True,
-            }
+            _omitted_content_entry(
+                "excel_full_rows",
+                reason="表格行数较多，未将全量行输入 Dify，仅保留字段结构、统计摘要和样例值。",
+                risk="模型无法逐行核验全部产品明细，如需精确产品级核验应人工打开附件。",
+                manual_review=True,
+                affects_core_attachment_detail=False,
+            )
         )
     if any(len([item for item in list(material.get("attachments") or []) if isinstance(item, dict)]) > 5 for material in list(pack.get("auxiliary_materials") or []) if isinstance(material, dict)):
+        auxiliary_detail_preserved = False
         omitted_content.append(
-            {
-                "type": "auxiliary_attachment_overflow",
-                "reason": "辅助材料附件较多，Dify 精简版仅保留核心或排序靠前的结构化摘要，避免工作流超时。",
-                "risk": "辅助材料附件细节不会作为主材料结论依据。",
-                "manual_review": False,
-            }
+            _omitted_content_entry(
+                "auxiliary_attachment_overflow",
+                reason="辅助材料附件较多，Dify 精简版仅保留核心或排序靠前的结构化摘要，避免工作流超时。",
+                risk="辅助材料附件细节不会作为主材料结论依据。",
+                manual_review=False,
+                affects_auxiliary_detail=True,
+            )
         )
+    if input_strategy == "staged_generation":
+        compression_reason.append("staged_generation_complexity_compact")
     unavailable_core_attachments = [
         attachment
         for material in [*primary_source, *auxiliary_source]
@@ -1368,18 +1487,28 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int | None 
         if isinstance(attachment, dict) and attachment.get("core_attachment") and not _attachment_is_usable_for_dify(attachment)
     ]
     for attachment in unavailable_core_attachments:
+        core_attachment_detail_preserved = False
         omitted_content.append(
-            {
-                "type": "core_attachment_unavailable",
-                "filename": str(attachment.get("filename") or ""),
-                "reason": "核心附件下载或解析失败，仅保留元数据和失败状态。",
-                "risk": "报告不能展开该附件中的产品、企业、价格或中选结果明细。",
-                "manual_review": True,
-            }
+            _omitted_content_entry(
+                "core_attachment_unavailable",
+                filename=str(attachment.get("filename") or ""),
+                reason="核心附件下载或解析失败，仅保留元数据和失败状态。",
+                risk="报告不能展开该附件中的产品、企业、价格或中选结果明细。",
+                manual_review=True,
+                affects_core_attachment_detail=True,
+            )
         )
     compact: dict[str, Any] = {
         "pack_variant": "dify_compact",
         "input_strategy": input_strategy,
+        "input_strategy_type": _dify_input_strategy_type(input_strategy),
+        "input_strategy_description": _dify_input_strategy_description(input_strategy),
+        "strategy_basis": _dify_input_strategy_basis(
+            input_strategy,
+            relevant_chars=dify_relevant_input_chars,
+            thresholds=thresholds,
+            primary_source=primary_source,
+        ),
         "attachment_led": input_strategy == "attachment_led",
         "table_heavy": input_strategy == "table_heavy",
         "pack_id": pack.get("pack_id") or "",
@@ -1500,13 +1629,25 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int | None 
         "warnings": [],
     }
     compact["dify_compacted"] = True
-    compact["compression_applied"] = input_strategy != "full_input" and original_pack_chars > target_max_chars
+    compact["compression_applied"] = input_strategy in {"light_compact", "safe_compact", "staged_generation"}
+    compact["compression_reason"] = list(dict.fromkeys(compression_reason))
+    compact["primary_detail_preserved"] = primary_detail_preserved
+    compact["core_attachment_detail_preserved"] = core_attachment_detail_preserved
+    compact["auxiliary_detail_preserved"] = auxiliary_detail_preserved
+    compact["full_row_level_detail_preserved"] = full_row_level_detail_preserved
+    compact["detail_preserved"] = primary_detail_preserved and core_attachment_detail_preserved
     compact["original_pack_chars"] = original_pack_chars
+    compact["strategy_basis_chars"] = dify_relevant_input_chars
     compact["dify_relevant_input_chars"] = dify_relevant_input_chars
     compact["hard_limit_chars"] = hard_limit
     compact["full_input_max_chars"] = thresholds["full_input"]
     compact["safe_compact_max_chars"] = thresholds["safe_compact"]
-    compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+    compact["strategy_thresholds"] = {
+        "hard_limit_chars": hard_limit,
+        "full_input_max_chars": thresholds["full_input"],
+        "safe_compact_max_chars": thresholds["safe_compact"],
+    }
+    _refresh_dify_char_fields(compact)
     compact["primary_evidence_score"] = sum(int(item.get("evidence_value_score") or 0) for item in primary)
     compact["auxiliary_evidence_score"] = sum(int(item.get("evidence_value_score") or 0) for item in auxiliary)
     compact["attachment_evidence_score"] = sum(
@@ -1542,42 +1683,106 @@ def _compact_evidence_pack_for_dify(pack: dict[str, Any], max_chars: int | None 
             compact.pop("primary_evidence", None)
             compact.pop("auxiliary_evidence", None)
             compact.pop("attachment_evidence", None)
-            compact["omitted_content"].append({"type": "secondary_evidence_blocks", "reason": "超过 Dify 变量长度限制，已移除重复的二级证据汇总块。"})
+            compression_reason.append("secondary_evidence_blocks_removed")
+            compact["omitted_content"].append(
+                _omitted_content_entry(
+                    "secondary_evidence_blocks",
+                    reason="超过 Dify 变量长度限制，已移除重复的二级证据汇总块。",
+                    risk="不影响主材料正文和主附件主体信息，因为 primary_materials 中仍保留核心证据。",
+                    manual_review=False,
+                )
+            )
             secondary_blocks_removed = True
-            compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+            compact["compression_applied"] = True
+            compact["compression_reason"] = list(dict.fromkeys(compression_reason))
+            _refresh_dify_char_fields(compact)
             continue
         for material in compact.get("primary_materials", []):
             text = str(material.get("content_text") or "")
             if len(text) > 2500:
                 material["content_text"] = _limit_text(text, max(2500, len(text) - 1000))
-                compact["omitted_content"].append({"type": "primary_content_tail", "reason": "主材料正文过长，已保留前部核心正文和结构化要点。"})
+                primary_detail_preserved = False
+                compression_reason.append("primary_content_trimmed")
+                compact["omitted_content"].append(
+                    _omitted_content_entry(
+                        "primary_content_tail",
+                        reason="主材料正文过长，已保留前部核心正文和结构化要点。",
+                        risk="主材料尾部细节可能未完整进入 Dify，报告应优先依据保留正文、关键事实和结构化规则。",
+                        manual_review=True,
+                        affects_primary_detail=True,
+                    )
+                )
                 changed = True
             for attachment in material.get("attachments") or []:
                 summary = str(attachment.get("summary") or "")
                 floor = 900 if attachment.get("core_attachment") else 400
                 if len(summary) > floor:
                     attachment["summary"] = _limit_text(summary, floor)
-                    compact["omitted_content"].append({"type": "attachment_summary_tail", "reason": "附件摘要过长，核心附件仍保留结构化表格摘要和关键事实。"})
+                    compression_reason.append("attachment_summary_trimmed")
+                    affects_core = bool(attachment.get("core_attachment"))
+                    if affects_core:
+                        core_attachment_detail_preserved = False
+                    compact["omitted_content"].append(
+                        _omitted_content_entry(
+                            "attachment_summary_tail",
+                            reason="附件摘要过长，已截断摘要尾部，但保留 table_summaries、key_facts 和字段统计。",
+                            risk="核心附件细节可能不完整，报告应优先依据结构化摘要和字段统计，避免编造行级明细。",
+                            manual_review=affects_core,
+                            affects_core_attachment_detail=affects_core,
+                        )
+                    )
                     changed = True
         for material in compact.get("auxiliary_materials", []):
             text = str(material.get("content_text") or "")
             if len(text) > 600:
                 material["content_text"] = _limit_text(text, 600)
-                compact["omitted_content"].append({"type": "auxiliary_content_tail", "reason": "辅助材料正文过长，优先保留相关片段和摘要。"})
+                auxiliary_detail_preserved = False
+                compression_reason.append("auxiliary_content_trimmed")
+                compact["omitted_content"].append(
+                    _omitted_content_entry(
+                        "auxiliary_content_tail",
+                        reason="辅助材料正文过长，优先保留相关片段和摘要。",
+                        risk="辅助材料细节可能未完整进入 Dify，不能作为主材料结论依据。",
+                        manual_review=False,
+                        affects_auxiliary_detail=True,
+                    )
+                )
                 changed = True
         if changed:
-            compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
+            compact["compression_applied"] = True
+            compact["compression_reason"] = list(dict.fromkeys(compression_reason))
+            compact["primary_detail_preserved"] = primary_detail_preserved
+            compact["core_attachment_detail_preserved"] = core_attachment_detail_preserved
+            compact["auxiliary_detail_preserved"] = auxiliary_detail_preserved
+            compact["detail_preserved"] = primary_detail_preserved and core_attachment_detail_preserved
+            _refresh_dify_char_fields(compact)
             continue
         compact["omitted_content"].append(
-            {
-                "type": "hard_limit_residual_overflow",
-                "reason": "证据包已执行所有保守压缩动作后仍接近或超过 Dify 变量限制，应走分段生成或人工复核。",
-                "manual_review": True,
-            }
+            _omitted_content_entry(
+                "hard_limit_residual_overflow",
+                reason="证据包已执行所有保守压缩动作后仍接近或超过 Dify 变量限制，应走分段生成或人工复核。",
+                risk="最终输入可能仍接近 Dify 上限，报告质量需人工复核。",
+                manual_review=True,
+                affects_primary_detail=not primary_detail_preserved,
+                affects_core_attachment_detail=not core_attachment_detail_preserved,
+                affects_auxiliary_detail=not auxiliary_detail_preserved,
+            )
         )
+        compression_reason.append("final_compact_pack_exceeded_target_max_chars")
+        compact["compression_applied"] = True
+        compact["compression_reason"] = list(dict.fromkeys(compression_reason))
         break
-    compact["compact_pack_chars"] = len(json.dumps(compact, ensure_ascii=False, sort_keys=True))
-    compact["compression_applied"] = False if input_strategy == "full_input" else compact["compact_pack_chars"] < original_pack_chars
+    compact["primary_detail_preserved"] = primary_detail_preserved
+    compact["core_attachment_detail_preserved"] = core_attachment_detail_preserved
+    compact["auxiliary_detail_preserved"] = auxiliary_detail_preserved
+    compact["full_row_level_detail_preserved"] = full_row_level_detail_preserved
+    compact["detail_preserved"] = primary_detail_preserved and core_attachment_detail_preserved
+    compact["compression_reason"] = list(dict.fromkeys(compression_reason))
+    _refresh_dify_char_fields(compact)
+    compact["compression_ratio"] = round(original_pack_chars / compact["final_dify_input_chars"], 4) if compact["final_dify_input_chars"] else None
+    _refresh_dify_char_fields(compact)
+    compact["compression_ratio"] = round(original_pack_chars / compact["final_dify_input_chars"], 4) if compact["final_dify_input_chars"] else None
+    _refresh_dify_char_fields(compact)
     return compact
 
 

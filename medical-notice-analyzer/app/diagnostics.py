@@ -453,7 +453,11 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
         {
             "type": item.get("type", ""),
             "reason": item.get("reason", ""),
+            "risk": item.get("risk", ""),
             "manual_review": bool(item.get("manual_review")),
+            "affects_primary_detail": bool(item.get("affects_primary_detail")),
+            "affects_core_attachment_detail": bool(item.get("affects_core_attachment_detail")),
+            "affects_auxiliary_detail": bool(item.get("affects_auxiliary_detail")),
         }
         for item in omitted_content[:12]
         if isinstance(item, dict)
@@ -468,6 +472,14 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
                 needs_manual_review_reasons.append(reason)
     if dify_pack and dify_pack.get("input_strategy") in {"safe_compact", "table_heavy", "staged_generation"} and dify_pack.get("compression_applied"):
         needs_manual_review_reasons.append("Dify 输入发生压缩，需关注被省略内容是否影响交付质量。")
+
+    original_pack_chars = int(dify_pack.get("original_pack_chars") or full_pack_chars) if dify_pack else full_pack_chars
+    compact_pack_chars = int(dify_pack.get("compact_pack_chars") or dify_compact_pack_chars) if dify_pack else dify_compact_pack_chars
+    final_dify_input_chars = int(dify_pack.get("final_dify_input_chars") or compact_pack_chars) if dify_pack else compact_pack_chars
+    strategy_basis_chars = int(dify_pack.get("strategy_basis_chars") or dify_pack.get("dify_relevant_input_chars") or 0) if dify_pack else 0
+    compression_ratio = None
+    if final_dify_input_chars:
+        compression_ratio = round(original_pack_chars / final_dify_input_chars, 4)
 
     return {
         "primary_count": len(primary),
@@ -497,15 +509,29 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
         "core_attachment_unparsed_names": core_unparsed_names,
         "attachment_analysis_impact": bool(core_unparsed_names),
         "compression_applied": bool(dify_pack.get("compression_applied")) if dify_pack else False,
+        "detail_preserved": bool(dify_pack.get("detail_preserved", True)) if dify_pack else True,
+        "primary_detail_preserved": bool(dify_pack.get("primary_detail_preserved", True)) if dify_pack else True,
+        "core_attachment_detail_preserved": bool(dify_pack.get("core_attachment_detail_preserved", True)) if dify_pack else True,
+        "auxiliary_detail_preserved": bool(dify_pack.get("auxiliary_detail_preserved", True)) if dify_pack else True,
+        "full_row_level_detail_preserved": bool(dify_pack.get("full_row_level_detail_preserved", True)) if dify_pack else True,
+        "compression_reason": list(dify_pack.get("compression_reason") or []) if dify_pack else [],
         "input_strategy": str(dify_pack.get("input_strategy") or "") if dify_pack else "",
+        "input_strategy_type": str(dify_pack.get("input_strategy_type") or "") if dify_pack else "",
+        "input_strategy_description": str(dify_pack.get("input_strategy_description") or "") if dify_pack else "",
+        "strategy_basis": str(dify_pack.get("strategy_basis") or "") if dify_pack else "",
         "hard_limit_chars": int(dify_pack.get("hard_limit_chars") or 0) if dify_pack else 0,
         "full_input_max_chars": int(dify_pack.get("full_input_max_chars") or 0) if dify_pack else 0,
         "safe_compact_max_chars": int(dify_pack.get("safe_compact_max_chars") or 0) if dify_pack else 0,
+        "strategy_thresholds": dict(dify_pack.get("strategy_thresholds") or {}) if dify_pack else {},
         "evidence_budget": dict(dify_pack.get("evidence_budget") or {}) if dify_pack else {},
         "generation_mode": str(((dify_pack.get("generation_guidance") or {}) if dify_pack else {}).get("generation_mode") or ""),
         "target_report_length": str(((dify_pack.get("generation_guidance") or {}) if dify_pack else {}).get("target_report_length") or ""),
-        "original_pack_chars": int(dify_pack.get("original_pack_chars") or full_pack_chars) if dify_pack else full_pack_chars,
-        "compact_pack_chars": int(dify_pack.get("compact_pack_chars") or dify_compact_pack_chars) if dify_pack else dify_compact_pack_chars,
+        "original_pack_chars": original_pack_chars,
+        "strategy_basis_chars": strategy_basis_chars,
+        "dify_relevant_input_chars": int(dify_pack.get("dify_relevant_input_chars") or strategy_basis_chars) if dify_pack else 0,
+        "final_dify_input_chars": final_dify_input_chars,
+        "compact_pack_chars": compact_pack_chars,
+        "compression_ratio": dify_pack.get("compression_ratio", compression_ratio) if dify_pack else compression_ratio,
         "compression_strategy": list(dify_pack.get("compression_strategy") or []) if dify_pack else [],
         "omitted_content": omitted_content,
         "omitted_content_count": len(omitted_content),
@@ -532,6 +558,11 @@ def build_pack_diagnostics(pack: dict[str, Any], dify_pack: dict[str, Any] | Non
             "辅助材料主要用于历史对比、背景说明和同类项目参照。",
             "未解析附件不能作为报告正文依据。",
             "Dify 使用精简证据包，完整证据包保留在后端。",
+            "input_strategy 表示策略选择依据，不等同于是否实际压缩。",
+            "compression_applied 表示是否发生实际内容压缩、省略、移除或截断。",
+            "strategy_basis_chars 是策略判断用字符数，通常等于 dify_relevant_input_chars。",
+            "final_dify_input_chars 是最终传给 Dify 的 compact JSON 字符数。",
+            "attachment_led 是附件主导型生成策略，不代表一定压缩。",
         ],
         "diagnosis": diagnosis,
     }

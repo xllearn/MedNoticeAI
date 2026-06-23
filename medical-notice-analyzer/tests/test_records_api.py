@@ -1020,11 +1020,18 @@ class RecordsApiTests(unittest.TestCase):
         self.assertIn("1500-2500", compact["generation_guidance"]["target_report_length"])
         diagnostics = build_pack_diagnostics(pack, compact)
         self.assertEqual(diagnostics["input_strategy"], "attachment_led")
+        self.assertEqual(diagnostics["input_strategy_type"], "structure_based")
+        self.assertIn("附件主导", diagnostics["input_strategy_description"])
+        self.assertFalse(diagnostics["compression_applied"])
+        self.assertTrue(diagnostics["detail_preserved"])
+        self.assertEqual(diagnostics["strategy_basis_chars"], compact["strategy_basis_chars"])
+        self.assertEqual(diagnostics["final_dify_input_chars"], compact["final_dify_input_chars"])
+        self.assertIn("input_strategy 表示策略选择", " ".join(diagnostics["diagnosis_basis"]))
 
     def test_dify_input_uses_essential_size_not_duplicate_bulk_for_full_input(self) -> None:
         content_text = "primary deadline price operation step " * 900
         attachment_summary = "core attachment selected result enterprise product price " * 420
-        duplicated_evidence = {"attachment_summaries": [{"summary": "duplicate secondary evidence " * 5000}]}
+        duplicated_evidence = {"attachment_summaries": [{"summary": "duplicate secondary evidence " * 500}]}
         pack = {
             "pack_id": "pack_duplicate_bulk_small_essential",
             "primary_materials": [
@@ -1073,10 +1080,67 @@ class RecordsApiTests(unittest.TestCase):
 
         self.assertGreater(compact["original_pack_chars"], 65000)
         self.assertEqual(compact["input_strategy"], "full_input")
+        self.assertEqual(compact["input_strategy_type"], "size_based")
+        self.assertEqual(compact["strategy_basis"], "dify_relevant_input_chars_within_full_input_threshold")
+        self.assertTrue(compact["detail_preserved"])
         self.assertFalse(compact["compression_applied"])
         self.assertEqual(compact["primary_materials"][0]["content_text"], content_text)
         self.assertEqual(compact["primary_materials"][0]["attachments"][0]["summary"], attachment_summary)
         self.assertLessEqual(compact["dify_relevant_input_chars"], compact["full_input_max_chars"])
+        self.assertNotIn("secondary_evidence_blocks", {item["type"] for item in compact["omitted_content"]})
+
+    def test_full_input_reports_compression_when_secondary_evidence_removed(self) -> None:
+        content_text = "primary deadline price operation step " * 400
+        attachment_summary = "core attachment selected result enterprise product price " * 280
+        duplicate_block = "duplicate secondary evidence not needed by Dify " * 2600
+        pack = {
+            "pack_id": "pack_full_input_secondary_removed",
+            "primary_materials": [
+                {
+                    "material_role": "primary",
+                    "menu_code": "m1",
+                    "articleid": "p1",
+                    "title": "Primary notice",
+                    "content_text": content_text,
+                    "content_text_length": len(content_text),
+                    "attachments": [
+                        {
+                            "articleattid": "att1",
+                            "filename": "selected-result.xlsx",
+                            "core_attachment": True,
+                            "business_type": "selected result",
+                            "parse_status": "parsed_summary",
+                            "summary": attachment_summary,
+                            "key_facts": ["selected price and enterprise fields are present"],
+                            "important_sections": ["operation path and deadline are listed"],
+                            "table_summaries": [],
+                        }
+                    ],
+                }
+            ],
+            "auxiliary_materials": [],
+            "primary_evidence": {
+                "key_facts": [duplicate_block],
+                "important_passages": [duplicate_block],
+                "attachment_summaries": [{"summary": duplicate_block}],
+            },
+            "auxiliary_evidence": {"summaries": [duplicate_block], "relevant_snippets": [duplicate_block]},
+            "attachment_evidence": {"parsed_summaries": [{"summary": duplicate_block}], "table_summaries": []},
+            "generation_guidance": {},
+        }
+
+        compact = main_module._compact_evidence_pack_for_dify(pack)
+        omitted_by_type = {item["type"]: item for item in compact["omitted_content"]}
+
+        self.assertEqual(compact["input_strategy"], "full_input")
+        self.assertLessEqual(compact["strategy_basis_chars"], compact["full_input_max_chars"])
+        self.assertTrue(compact["compression_applied"])
+        self.assertTrue(compact["detail_preserved"])
+        self.assertIn("secondary_evidence_blocks_removed", compact["compression_reason"])
+        self.assertIn("secondary_evidence_blocks", omitted_by_type)
+        self.assertFalse(omitted_by_type["secondary_evidence_blocks"]["affects_primary_detail"])
+        self.assertFalse(omitted_by_type["secondary_evidence_blocks"]["affects_core_attachment_detail"])
+        self.assertEqual(compact["final_dify_input_chars"], compact["compact_pack_chars"])
 
     def test_dify_input_uses_safe_compact_near_hard_limit_and_keeps_core_attachment(self) -> None:
         primary_text = "primary procurement rule deadline execution " * 900
@@ -1133,6 +1197,11 @@ class RecordsApiTests(unittest.TestCase):
         compact = main_module._compact_evidence_pack_for_dify(pack)
 
         self.assertEqual(compact["input_strategy"], "safe_compact")
+        self.assertEqual(compact["input_strategy_type"], "size_based")
+        self.assertEqual(compact["strategy_basis"], "near_hard_limit")
+        self.assertTrue(compact["compression_applied"])
+        self.assertFalse(compact["auxiliary_detail_preserved"])
+        self.assertIn("auxiliary_content_trimmed", compact["compression_reason"])
         self.assertLessEqual(compact["compact_pack_chars"], compact["hard_limit_chars"])
         self.assertTrue(compact["primary_materials"][0]["attachments"][0]["table_summaries"])
         self.assertLessEqual(len(compact["auxiliary_materials"][0]["content_text"]), 700)
@@ -1186,7 +1255,12 @@ class RecordsApiTests(unittest.TestCase):
         compact = main_module._compact_evidence_pack_for_dify(pack)
 
         self.assertEqual(compact["input_strategy"], "table_heavy")
+        self.assertEqual(compact["input_strategy_type"], "structure_based")
+        self.assertEqual(compact["strategy_basis"], "primary_table_rows_exceed_table_heavy_threshold")
         self.assertTrue(compact["table_heavy"])
+        self.assertTrue(compact["detail_preserved"])
+        self.assertFalse(compact["full_row_level_detail_preserved"])
+        self.assertIn("excel_full_rows", {item["type"] for item in compact["omitted_content"]})
         self.assertIn("large_table_structured_summary", compact["generation_guidance"]["generation_mode"])
         table = compact["primary_materials"][0]["attachments"][0]["table_summaries"][0]
         self.assertEqual(table["field_stats"]["enterprise"]["unique_count"], 200)
@@ -1227,7 +1301,10 @@ class RecordsApiTests(unittest.TestCase):
         compact = main_module._compact_evidence_pack_for_dify(pack)
 
         self.assertEqual(compact["input_strategy"], "staged_generation")
+        self.assertEqual(compact["input_strategy_type"], "complexity_based")
+        self.assertEqual(compact["strategy_basis"], "multi_primary_materials")
         self.assertTrue(compact["compression_applied"])
+        self.assertIn("staged_generation_complexity_compact", compact["compression_reason"])
         self.assertLess(compact["compact_pack_chars"], 65000)
         self.assertIn("per_material_then_synthesis", compact["generation_guidance"]["generation_mode"])
         self.assertIn("3000-5000", compact["generation_guidance"]["target_report_length"])
